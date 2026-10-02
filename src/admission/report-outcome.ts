@@ -11,6 +11,7 @@ export interface ReportOutcomeInput {
 export interface Resolved {
   allowed: true;
   costUnknown: boolean;
+  poolMissing: boolean;
 }
 export type ReportDenialReason = "unknown_reservation" | "already_resolved";
 export interface ReportDenial {
@@ -37,6 +38,28 @@ export interface ReportDenial {
  *   success, no cost  -> refund = 0, costUnknown = true
  *   failure, no cost  -> refund = estimatedCost (full refund)
  */
+/**
+ * KEYS[1] reservation hash   KEYS[2] budget pool (integer)
+ * KEYS[3] concurrency counter (integer)   KEYS[4] expiring-reservations sorted set
+ * ARGV[1] reservationId  ARGV[2] success ("1"/"0")  ARGV[3] actualCostGiven ("1"/"0")
+ * ARGV[4] actualCost (ignored if ARGV[3] is "0")  ARGV[5] now (ms)
+ *
+ * Existence check, idempotency check, refund computation, and all mutations happen in one
+ * atomic step (see the longer comment history in this file for why). This version adds a
+ * guard found after shipping: the budget pool has no TTL (Slice 1b: "budget is lifetime
+ * state, it must outlive any agent"), but no-TTL does not mean it cannot be deleted by
+ * something outside the library (an operator, a future pool-closing API, Redis eviction).
+ * Redis's INCRBY on a missing key does not error — it silently recreates the key at the
+ * refund value, which would either hand out budget nobody authorized (positive refund) or
+ * create a negative pool from nothing (negative refund), with no signal to the caller either
+ * way. This script now checks EXISTS on the pool before refunding.
+ *
+ * Chosen behavior on a missing pool (option B, not A): the reservation still resolves fully
+ * (concurrency released, sorted-set entry removed, marked resolved) so it is never left
+ * permanently stuck and its concurrency slot is never held forever — only the refund itself
+ * is skipped, and the caller is told via poolMissing so the anomaly is visible rather than
+ * silent.
+ */
 const REPORT_OUTCOME = defineScript(
   `
 local r = redis.call('HMGET', KEYS[1], 'resolved', 'estimatedCost', 'budgetKey', 'target')
@@ -62,14 +85,20 @@ else
   refund = estimatedCost
 end
 
+local poolMissing = 0
 if refund ~= 0 then
-  redis.call('INCRBY', KEYS[2], refund)
+  if redis.call('EXISTS', KEYS[2]) == 1 then
+    redis.call('INCRBY', KEYS[2], refund)
+  else
+    poolMissing = 1
+  end
 end
+
 redis.call('DECR', KEYS[3])
 redis.call('HSET', KEYS[1], 'resolved', '1', 'resolvedAt', ARGV[5], 'costUnknown', tostring(costUnknown))
 redis.call('ZREM', KEYS[4], ARGV[1])
 
-return {1, costUnknown}
+return {1, costUnknown, poolMissing}
 `,
   4,
 );
@@ -108,9 +137,9 @@ export async function reportOutcome(
   // matters — only 'does this reservation still exist / is it already resolved' can change
   // between this read and the script's write, and the script re-checks both atomically.
   const [budgetKey, target] = await config.redis.hmget(keys.reservation(input.reservationId), "budgetKey", "target");
-  if (budgetKey === null || target === null) {
-    return { allowed: false, reason: "unknown_reservation" };
-  }
+  if (!budgetKey || !target) {
+  return { allowed: false, reason: "unknown_reservation" };
+}
 
   const reply = await runScript(
     config.redis,
@@ -125,12 +154,12 @@ export async function reportOutcome(
     ],
   );
 
-  if (Array.isArray(reply)) {
-    const [status, a] = reply as unknown[];
+    if (Array.isArray(reply)) {
+    const [status, a, b] = reply as unknown[];
     if (status === 0 && (a === "unknown_reservation" || a === "already_resolved")) {
       return { allowed: false, reason: a };
     }
-    if (status === 1) return { allowed: true, costUnknown: a === 1 };
+    if (status === 1) return { allowed: true, costUnknown: a === 1, poolMissing: b === 1 };
   }
   throw new BrokerError(`unexpected reply from report-outcome script: ${JSON.stringify(reply)}`);
 }

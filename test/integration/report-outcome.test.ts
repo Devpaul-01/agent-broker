@@ -33,7 +33,7 @@ describe("reportOutcome (real Redis)", () => {
     const { budgetKey, reservationId } = await admitted(1000, 300);
     const result = await reportOutcome(config, { reservationId, success: true, actualCost: 200 });
 
-    expect(result).toEqual({ allowed: true, costUnknown: false });
+    expect(result).toEqual({ allowed: true, costUnknown: false, poolMissing: false });
     expect(await redis.get(keys.budget(budgetKey))).toBe("900"); // 1000 - 300 + (300-200)
     expect(await redis.hget(keys.reservation(reservationId), "resolved")).toBe("1");
   });
@@ -48,7 +48,7 @@ describe("reportOutcome (real Redis)", () => {
     const { budgetKey, reservationId } = await admitted(1000, 300);
     const result = await reportOutcome(config, { reservationId, success: true });
 
-    expect(result).toEqual({ allowed: true, costUnknown: true });
+    expect(result).toEqual({ allowed: true, costUnknown: true, poolMissing: false });
     expect(await redis.get(keys.budget(budgetKey))).toBe("700"); // no refund
     expect(await redis.hget(keys.reservation(reservationId), "costUnknown")).toBe("1");
   });
@@ -57,7 +57,7 @@ describe("reportOutcome (real Redis)", () => {
     const { budgetKey, reservationId } = await admitted(1000, 300);
     const result = await reportOutcome(config, { reservationId, success: false });
 
-    expect(result).toEqual({ allowed: true, costUnknown: false });
+    expect(result).toEqual({ allowed: true, costUnknown: false, poolMissing: false });
     expect(await redis.get(keys.budget(budgetKey))).toBe("1000"); // back to original
   });
 
@@ -95,7 +95,7 @@ describe("reportOutcome (real Redis)", () => {
     const first = await reportOutcome(config, { reservationId, success: true, actualCost: 100 });
     const second = await reportOutcome(config, { reservationId, success: true, actualCost: 100 });
 
-    expect(first).toEqual({ allowed: true, costUnknown: false });
+    expect(first).toEqual({ allowed: true, costUnknown: false, poolMissing: false });
     expect(second).toEqual({ allowed: false, reason: "already_resolved" });
     expect(await redis.get(keys.budget(budgetKey))).toBe("900"); // only one refund applied
   });
@@ -111,7 +111,7 @@ describe("reportOutcome (real Redis)", () => {
     await redis.zadd(keys.reservationsExpiring(), Date.now() - 1, reservationId);
     const result = await reportOutcome(config, { reservationId, success: true, actualCost: 150 });
 
-    expect(result).toEqual({ allowed: true, costUnknown: false });
+    expect(result).toEqual({ allowed: true, costUnknown: false, poolMissing: false });
     expect(await redis.get(keys.budget(budgetKey))).toBe("850"); // 1000 - 300 + (300-150)
   });
 
@@ -129,5 +129,36 @@ describe("reportOutcome (real Redis)", () => {
     } finally {
       await Promise.all(clients.map((c) => c.quit()));
     }
+  });
+
+  it("resolves the reservation even when the budget pool has been deleted externally, and reports poolMissing instead of silently recreating it", async () => {
+    const { budgetKey, reservationId } = await admitted(1000, 300);
+    await redis.del(keys.budget(budgetKey)); // simulate external deletion — no DEL exists in our own code path
+
+    const result = await reportOutcome(config, { reservationId, success: true, actualCost: 100 });
+
+    expect(result).toEqual({ allowed: true, costUnknown: false, poolMissing: true });
+    // The refund must not have silently recreated the pool.
+    expect(await redis.exists(keys.budget(budgetKey))).toBe(0);
+    // The reservation still resolves fully: no stuck state, no held-forever concurrency slot.
+    expect(await redis.hget(keys.reservation(reservationId), "resolved")).toBe("1");
+  });
+
+  it("releases the concurrency slot even when the budget pool is missing", async () => {
+    const agent = await registerRoot(config, { budgetKey: `k${Math.random()}`, initialBudget: 1000 }).then((r) => r.agent);
+    const result = (await requestPermission(config, { agentId: agent.agentId, target: "shared", estimatedCost: 10 })) as Admitted;
+    await redis.del(keys.budget(agent.budgetKey));
+
+    await reportOutcome(config, { reservationId: result.reservationId, success: false });
+    expect(await redis.get(keys.concurrency("shared", agent.budgetKey))).toBe("0");
+  });
+
+  it("does not report poolMissing when refund is zero (costUnknown path), even if the pool happens to be gone", async () => {
+    const { budgetKey, reservationId } = await admitted(1000, 300);
+    await redis.del(keys.budget(budgetKey));
+
+    // success with no actualCost -> refund is 0 -> EXISTS is never checked -> poolMissing stays false
+    const result = await reportOutcome(config, { reservationId, success: true });
+    expect(result).toEqual({ allowed: true, costUnknown: true, poolMissing: false });
   });
 });
