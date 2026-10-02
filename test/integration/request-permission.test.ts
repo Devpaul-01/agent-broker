@@ -25,6 +25,59 @@ describe("requestPermission (real Redis)", () => {
     return (await registerRoot(config, { budgetKey: `k${Math.random()}`, initialBudget })).agent;
   }
 
+    it("denies concurrency_exceeded once the limit is reached, leaving budget untouched", async () => {
+    const agent = await registerRoot(parseConfig({ redis, concurrencyLimit: 2 }), {
+      budgetKey: `conc-${Math.random()}`, initialBudget: 1000,
+    }).then((r) => r.agent);
+    const limitedConfig = parseConfig({ redis, concurrencyLimit: 2 });
+
+    const first = await requestPermission(limitedConfig, { agentId: agent.agentId, target: "t", estimatedCost: 10 });
+    const second = await requestPermission(limitedConfig, { agentId: agent.agentId, target: "t", estimatedCost: 10 });
+    const third = await requestPermission(limitedConfig, { agentId: agent.agentId, target: "t", estimatedCost: 10 });
+
+    expect(first.allowed).toBe(true);
+    expect(second.allowed).toBe(true);
+    expect(third).toEqual({ allowed: false, reason: "concurrency_exceeded" });
+    expect(await redis.get(keys.concurrency("t", agent.budgetKey))).toBe("2");
+    // The third call's cost must not have been reserved from the budget.
+    expect(await redis.get(keys.budget(agent.budgetKey))).toBe("980");
+  });
+
+  it("scopes concurrency per (target, budgetKey): a different target is unaffected by the same agent's limit", async () => {
+    const agent = await registerRoot(parseConfig({ redis, concurrencyLimit: 1 }), {
+      budgetKey: `scope-${Math.random()}`, initialBudget: 1000,
+    }).then((r) => r.agent);
+    const limitedConfig = parseConfig({ redis, concurrencyLimit: 1 });
+
+    const first = await requestPermission(limitedConfig, { agentId: agent.agentId, target: "t1", estimatedCost: 10 });
+    const second = await requestPermission(limitedConfig, { agentId: agent.agentId, target: "t2", estimatedCost: 10 });
+
+    expect(first.allowed).toBe(true);
+    expect(second.allowed).toBe(true); // different target, separate counter
+  });
+
+  // Invariant 13, under real contention.
+  it("admits exactly the concurrency limit under real concurrent callers, never over", async () => {
+    const agent = await registerRoot(parseConfig({ redis, concurrencyLimit: 5 }), {
+      budgetKey: `race-${Math.random()}`, initialBudget: 100_000,
+    }).then((r) => r.agent);
+    const clients = Array.from({ length: 20 }, () => redis.duplicate());
+    try {
+      const results = await Promise.all(
+        clients.map((c) =>
+          requestPermission(parseConfig({ redis: c, concurrencyLimit: 5 }), {
+            agentId: agent.agentId, target: "shared-target", estimatedCost: 1,
+          }),
+        ),
+      );
+      const admitted = results.filter((r) => r.allowed).length;
+      expect(admitted).toBe(5);
+      expect(await redis.get(keys.concurrency("shared-target", agent.budgetKey))).toBe("5");
+    } finally {
+      await Promise.all(clients.map((c) => c.quit()));
+    }
+  });
+
   it("admits, reserves the estimated cost, and records a refundable reservation", async () => {
     const agent = await root(1000);
     const result = await requestPermission(config, { agentId: agent.agentId, target: "groq:llama", estimatedCost: 300 });

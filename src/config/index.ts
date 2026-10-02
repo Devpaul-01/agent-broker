@@ -7,17 +7,28 @@ export interface CircuitBreakerOptions {
   windowMs?: number;
   probeRate?: number;
 }
-
 export interface BrokerOptions {
   redis: Redis;
   maxDepth?: number;
-  /** ms. Agent registration lifetime, refreshed on every call. Must be >= maxReservationTtl. */
   agentTtl?: number;
   defaultReservationTtl?: number;
   maxReservationTtl?: number;
+  concurrencyLimit?: number;
   onRedisUnavailable?: "deny" | "allow";
   circuitBreaker?: CircuitBreakerOptions;
 }
+
+export interface ResolvedConfig {
+  readonly redis: Redis;
+  readonly maxDepth: number;
+  readonly agentTtl: number;
+  readonly defaultReservationTtl: number;
+  readonly maxReservationTtl: number;
+  readonly concurrencyLimit: number;
+  readonly onRedisUnavailable: "deny" | "allow";
+  readonly circuitBreaker: Readonly<Required<CircuitBreakerOptions>>;
+}
+
 
 export interface ResolvedConfig {
   readonly redis: Redis;
@@ -41,6 +52,7 @@ export function parseConfig(options: BrokerOptions): ResolvedConfig {
   if (options == null || options.redis == null) {
     throw new BrokerConfigError("redis is required: pass the ioredis client the broker should use");
   }
+  const concurrencyLimit = int("concurrencyLimit", options.concurrencyLimit, 10, 1);
 
   const maxDepth = int("maxDepth", options.maxDepth, 5, 0);
   const defaultReservationTtl = int("defaultReservationTtl", options.defaultReservationTtl, 30_000, 1);
@@ -83,12 +95,13 @@ export function parseConfig(options: BrokerOptions): ResolvedConfig {
 
   // Copy values into a fresh frozen object: later mutation of the caller's options must not
   // change a live broker (ADR-19).
-  return Object.freeze({
+    return Object.freeze({
     redis: options.redis,
     maxDepth,
     agentTtl,
     defaultReservationTtl,
     maxReservationTtl,
+    concurrencyLimit,
     onRedisUnavailable,
     circuitBreaker: Object.freeze({ softThreshold, hardThreshold, windowMs, probeRate }),
   });

@@ -14,6 +14,8 @@ describe("parseConfig", () => {
       defaultReservationTtl: 30_000,
       maxReservationTtl: 300_000,
       onRedisUnavailable: "deny",
+      concurrencyLimit: 10,
+      
       circuitBreaker: { softThreshold: 5, hardThreshold: 20, windowMs: 60_000, probeRate: 0.1 },
     });
   });
@@ -39,6 +41,7 @@ describe("parseConfig", () => {
   it.each([
     ["maxDepth negative", { maxDepth: -1 }, "maxDepth"],
     ["maxDepth fractional", { maxDepth: 1.5 }, "maxDepth"],
+    ["concurrencyLimit zero", { concurrencyLimit: 0 }, "concurrencyLimit"],
     ["defaultReservationTtl zero", { defaultReservationTtl: 0 }, "defaultReservationTtl"],
     ["default TTL above max", { defaultReservationTtl: 400_000 }, "defaultReservationTtl"],
     ["agentTtl below maxReservationTtl", { agentTtl: 1_000 }, "agentTtl"],
