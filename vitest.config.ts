@@ -9,7 +9,6 @@ export default defineConfig({
     // same database out from under each other mid-run. pool: "threads" with a single
     // worker forces every file through one process, so flushes and tests never interleave.
     fileParallelism: false,
-    pool: "threads",
-    poolOptions: { threads: { singleThread: true } },
+  
   },
 });

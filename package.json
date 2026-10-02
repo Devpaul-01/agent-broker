@@ -10,8 +10,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
-    "test:unit": "vitest run --dir test/unit",
-    "test:integration": "vitest run --dir test/integration",
+    "test:unit": "vitest run --dir test/unit --include '**/*.test.ts'",
+    "test:integration": "vitest run --dir test/integration --include '**/*.test.ts'",
     "redis:up": "docker compose up -d --wait",
     "redis:down": "docker compose down"
   },
