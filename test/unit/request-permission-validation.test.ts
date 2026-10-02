@@ -5,7 +5,7 @@ import { BrokerArgumentError } from "../../src/errors/index.js";
 import { requestPermission } from "../../src/admission/request-permission.js";
 
 const fake = {} as Redis; // touching it would throw a TypeError, failing the test
-const config = parseConfig({ redis: fake, maxReservationTtl: 100_000 });
+const config = parseConfig({ redis: fake, maxReservationTtl: 10_000 });
 const base = { agentId: "a", target: "t", estimatedCost: 10 };
 
 describe("requestPermission() validation", () => {
