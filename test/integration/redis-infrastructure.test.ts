@@ -1,6 +1,6 @@
 import type { Redis } from "ioredis";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { connectTestRedis } from "./helpers/redis.js";
+import { connectTestRedis } from "../helpers/redis.js";
 
 describe("test infrastructure", () => {
   let redis: Redis;
