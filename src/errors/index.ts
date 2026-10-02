@@ -7,3 +7,7 @@ export class BrokerConfigError extends Error {
 export class BrokerArgumentError extends Error {
   override name = "BrokerArgumentError";
 }
+/** Thrown for a genuine error (bad arguments, Redis/script failure) — never for an ordinary denial. */
+export class BrokerError extends Error {
+  override name = "BrokerError";
+}
