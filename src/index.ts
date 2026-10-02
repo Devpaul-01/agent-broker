@@ -5,3 +5,4 @@ export type { RegisterRootInput, RootAgent } from "./agents/register.js";
 export type { ChildAgent, RegisterChildInput, RegisterDenial, RegisterDenialReason } from "./agents/register-child.js";
 export type { Admitted, Denied, DenialReason, RequestPermissionInput } from "./admission/request-permission.js";
 export { BrokerArgumentError, BrokerConfigError, BrokerError } from "./errors/index.js";
+export type { ReportDenialReason, ReportOutcomeInput, Resolved, ReportDenial } from "./admission/report-outcome.js";

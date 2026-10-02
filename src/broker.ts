@@ -1,12 +1,14 @@
 import { registerChild, type ChildAgent, type RegisterChildInput, type RegisterDenial } from "./agents/register-child.js";
 import { registerRoot, type RegisterRootInput, type RootAgent } from "./agents/register.js";
 import { type Admitted, type Denied, requestPermission as requestPermissionImpl, type RequestPermissionInput } from "./admission/request-permission.js";
+import { type Resolved, type ReportDenial, reportOutcome as reportOutcomeImpl, type ReportOutcomeInput } from "./admission/report-outcome.js";
 import { type BrokerOptions, parseConfig } from "./config/index.js";
 
 export interface Broker {
   register(input: RegisterRootInput): Promise<RootAgent>;
   register(input: RegisterChildInput): Promise<ChildAgent | RegisterDenial>;
   requestPermission(input: RequestPermissionInput): Promise<Admitted | Denied>;
+  reportOutcome(input: ReportOutcomeInput): Promise<Resolved | ReportDenial>;
 }
 
 export function createBroker(options: BrokerOptions): Broker {
@@ -24,5 +26,6 @@ export function createBroker(options: BrokerOptions): Broker {
   return Object.freeze({
     register,
     requestPermission: (input: RequestPermissionInput) => requestPermissionImpl(config, input),
+    reportOutcome: (input: ReportOutcomeInput) => reportOutcomeImpl(config, input),
   });
 }
