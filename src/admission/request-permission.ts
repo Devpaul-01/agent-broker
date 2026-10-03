@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ResolvedConfig } from "../config/index.js";
 import { BrokerArgumentError, BrokerError } from "../errors/index.js";
 import { keys } from "../redis/keys.js";
+import { sweepExpiredReservations } from "./cleanup.js";
 import { defineScript, runScript } from "../redis/script.js";
 
 export interface RequestPermissionInput {
@@ -169,6 +170,8 @@ export async function requestPermission(
   input: RequestPermissionInput,
 ): Promise<Admitted | Denied> {
   validate(input);
+
+  await sweepExpiredReservations(config);
 
   const ttl = input.ttl ?? config.defaultReservationTtl;
   if (ttl > config.maxReservationTtl) {
