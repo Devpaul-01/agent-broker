@@ -5,14 +5,14 @@
   "type": "module",
   "engines": { "node": ">=20" },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json",
-    "test": "vitest run",
-    "test:unit": "vitest run --dir test/unit",
-    "test:integration": "vitest run --dir test/integration",
-    "redis:up": "docker compose up -d --wait",
-    "redis:down": "docker compose down"
-  },
+  "typecheck": "tsc --noEmit",
+  "build": "tsc -p tsconfig.build.json",
+  "test": "vitest run",
+  "test:unit": "vitest run test/unit",
+  "test:integration": "vitest run test/integration",
+  "redis:up": "docker compose up -d --wait",
+  "redis:down": "docker compose down"
+},
   "peerDependencies": {
     "ioredis": "^5.0.0"
   },
