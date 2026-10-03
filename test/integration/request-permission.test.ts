@@ -3,6 +3,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { registerRoot } from "../../src/agents/register.js";
 import { requestPermission } from "../../src/admission/request-permission.js";
 import { parseConfig } from "../../src/config/index.js";
+import type { Admitted } from "../../src/admission/request-permission.js";
+import { reportOutcome } from "../../src/admission/report-outcome.js";
 import { keys } from "../../src/redis/keys.js";
 import { connectTestRedis } from "../helpers/redis.js";
 
@@ -25,6 +27,76 @@ describe("requestPermission (real Redis)", () => {
     return (await registerRoot(config, { budgetKey: `k${Math.random()}`, initialBudget })).agent;
   }
 
+  async function agentWithCircuit(cb: Partial<import("../../src/config/index.js").CircuitBreakerOptions>) {
+    const cfg = parseConfig({ redis, circuitBreaker: { softThreshold: 2, hardThreshold: 4, windowMs: 60_000, probeRate: 0.0001, ...cb } });
+    const agent = await registerRoot(cfg, { budgetKey: `cb-${Math.random()}`, initialBudget: 100_000 }).then((r) => r.agent);
+    return { cfg, agent };
+  }
+
+  it("attaches retryAfter once the failure count reaches softThreshold, without denying", async () => {
+    const { cfg, agent } = await agentWithCircuit({});
+    for (let i = 0; i < 2; i++) {
+      const admit = (await requestPermission(cfg, { agentId: agent.agentId, target: "flaky", estimatedCost: 1 })) as Admitted;
+      await reportOutcome(cfg, { reservationId: admit.reservationId, success: false, retryable: true });
+    }
+    const result = await requestPermission(cfg, { agentId: agent.agentId, target: "flaky", estimatedCost: 1 });
+    expect(result.allowed).toBe(true);
+    expect((result as Admitted).retryAfter).toBeGreaterThan(0);
+  });
+
+  it("opens the circuit at hardThreshold and denies subsequent calls with circuit_open", async () => {
+    const { cfg, agent } = await agentWithCircuit({});
+    for (let i = 0; i < 4; i++) {
+      const admit = (await requestPermission(cfg, { agentId: agent.agentId, target: "down", estimatedCost: 1 })) as Admitted;
+      await reportOutcome(cfg, { reservationId: admit.reservationId, success: false, retryable: true });
+    }
+    const result = await requestPermission(cfg, { agentId: agent.agentId, target: "down", estimatedCost: 1 });
+    expect(result).toEqual({ allowed: false, reason: "circuit_open" });
+    expect(await redis.get(keys.circuitState("down"))).toBe("open");
+  });
+
+  it("does not count non-retryable failures toward the circuit", async () => {
+    const { cfg, agent } = await agentWithCircuit({});
+    for (let i = 0; i < 10; i++) {
+      const admit = (await requestPermission(cfg, { agentId: agent.agentId, target: "picky", estimatedCost: 1 })) as Admitted;
+      await reportOutcome(cfg, { reservationId: admit.reservationId, success: false, retryable: false });
+    }
+    const result = await requestPermission(cfg, { agentId: agent.agentId, target: "picky", estimatedCost: 1 });
+    expect(result.allowed).toBe(true);
+    expect((result as Admitted).retryAfter).toBeUndefined();
+  });
+
+  it("admits only a probe while open (deterministic via probeRate=1), and a successful probe closes the circuit", async () => {
+    const { cfg, agent } = await agentWithCircuit({ probeRate: 1 }); // force every open-state call to be a probe
+    for (let i = 0; i < 4; i++) {
+      const admit = (await requestPermission(cfg, { agentId: agent.agentId, target: "recovering", estimatedCost: 1 })) as Admitted;
+      await reportOutcome(cfg, { reservationId: admit.reservationId, success: false, retryable: true });
+    }
+    expect(await redis.get(keys.circuitState("recovering"))).toBe("open");
+
+    const probe = (await requestPermission(cfg, { agentId: agent.agentId, target: "recovering", estimatedCost: 1 })) as Admitted;
+    expect(probe.allowed).toBe(true); // admitted as the probe despite the open circuit
+    await reportOutcome(cfg, { reservationId: probe.reservationId, success: true });
+
+    expect(await redis.get(keys.circuitState("recovering"))).toBe("closed");
+    const after = await requestPermission(cfg, { agentId: agent.agentId, target: "recovering", estimatedCost: 1 });
+    expect(after.allowed).toBe(true); // fully recovered, not just probe-admitted
+  });
+
+  it("denies non-probe calls while open even with probeRate set (probeRate=0 would violate Invariant 11, so use a near-zero rate)", async () => {
+    const { cfg, agent } = await agentWithCircuit({ probeRate: 0.0001 }); // effectively never draws a probe in this test
+    for (let i = 0; i < 4; i++) {
+      const admit = (await requestPermission(cfg, { agentId: agent.agentId, target: "still-down", estimatedCost: 1 })) as Admitted;
+      await reportOutcome(cfg, { reservationId: admit.reservationId, success: false, retryable: true });
+    }
+    const result = await requestPermission(cfg, { agentId: agent.agentId, target: "still-down", estimatedCost: 1 });
+    expect(result).toEqual({ allowed: false, reason: "circuit_open" });
+  });
+
+  
+
+  
+
     it("denies concurrency_exceeded once the limit is reached, leaving budget untouched", async () => {
     const agent = await registerRoot(parseConfig({ redis, concurrencyLimit: 2 }), {
       budgetKey: `conc-${Math.random()}`, initialBudget: 1000,
@@ -42,6 +114,7 @@ describe("requestPermission (real Redis)", () => {
     // The third call's cost must not have been reserved from the budget.
     expect(await redis.get(keys.budget(agent.budgetKey))).toBe("980");
   });
+  
 
   it("scopes concurrency per (target, budgetKey): a different target is unaffected by the same agent's limit", async () => {
     const agent = await registerRoot(parseConfig({ redis, concurrencyLimit: 1 }), {

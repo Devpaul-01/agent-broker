@@ -10,6 +10,7 @@
 const seg = (value: string): string => `${value.length}:${value}`;
 export const keys = {
   agent: (agentId: string) => `agent:${agentId}`,
+    circuitState: (target: string) => `circuit:${seg(target)}:state`,
   budget: (budgetKey: string) => `budget:${seg(budgetKey)}`,
   reservation: (reservationId: string) => `reservation:${reservationId}`,
   // Logical expiry index, separate from the reservation hash's own Redis-level TTL.

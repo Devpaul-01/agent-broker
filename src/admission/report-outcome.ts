@@ -7,6 +7,11 @@ export interface ReportOutcomeInput {
   reservationId: string;
   success: boolean;
   actualCost?: number;
+  /** Required when success is false: was this failure the target's fault and worth retrying
+   * (timeout, 5xx), or not (a local validation error, a 4xx)? Only retryable failures count
+   * toward the circuit breaker's sliding window — this is what lets requestPermission tell
+   * "target is struggling" apart from "caller made a bad call" (Section 16). */
+  retryable?: boolean;
 }
 export interface Resolved {
   allowed: true;
@@ -20,49 +25,34 @@ export interface ReportDenial {
 }
 
 /**
- * KEYS[1] reservation hash   KEYS[2] budget pool (integer)
- * KEYS[3] concurrency counter (integer)   KEYS[4] expiring-reservations sorted set
+ * KEYS[1] reservation hash          KEYS[2] budget pool (integer)
+ * KEYS[3] concurrency counter       KEYS[4] expiring-reservations sorted set
+ * KEYS[5] circuit failure window (sorted set, per target)
+ * KEYS[6] circuit state (string, per target)
  * ARGV[1] reservationId  ARGV[2] success ("1"/"0")  ARGV[3] actualCostGiven ("1"/"0")
- * ARGV[4] actualCost (ignored if ARGV[3] is "0")  ARGV[5] now (ms)
+ * ARGV[4] actualCost  ARGV[5] now (ms)  ARGV[6] retryable ("1"/"0", only meaningful if !success)
+ * ARGV[7] windowMs  ARGV[8] softThreshold  ARGV[9] hardThreshold
  *
- * Existence check, idempotency check, refund computation, and all four state mutations
- * (budget, concurrency, reservation.resolved, sorted-set removal) happen in one atomic step.
- * Two reportOutcome calls racing on the same reservationId must not both refund: the script
- * reads and sets 'resolved' itself rather than trusting a separate TypeScript-side check,
- * which would reopen the same read-then-write race pattern seen in every earlier script.
+ * See earlier comments in this file for the budget/concurrency/idempotency/poolMissing
+ * reasoning, unchanged here. This version adds circuit-breaker bookkeeping:
  *
- * Refund formula (see the table in the accompanying commit message / PR description):
- *   actualCost given  -> refund = estimatedCost - actualCost   (can be negative; reconciliation
- *                         is allowed to push the pool below zero, unlike admission, which never
- *                         is — Invariant 5 governs admission only)
- *   success, no cost  -> refund = 0, costUnknown = true
- *   failure, no cost  -> refund = estimatedCost (full refund)
- */
-/**
- * KEYS[1] reservation hash   KEYS[2] budget pool (integer)
- * KEYS[3] concurrency counter (integer)   KEYS[4] expiring-reservations sorted set
- * ARGV[1] reservationId  ARGV[2] success ("1"/"0")  ARGV[3] actualCostGiven ("1"/"0")
- * ARGV[4] actualCost (ignored if ARGV[3] is "0")  ARGV[5] now (ms)
+ * A retryable failure is recorded into a sliding-window sorted set (member=reservationId,
+ * score=failure time), trimmed to the window on every write so it never grows unbounded.
+ * This is recording only — the admission-time decision (soft/hard threshold, open/closed)
+ * lives in requestPermission's script, which reads this same window. The two are separate
+ * atomic operations on shared state, not one race, because "did a failure just happen" and
+ * "how many calls should currently be admitted" are asked at different times by different
+ * callers.
  *
- * Existence check, idempotency check, refund computation, and all mutations happen in one
- * atomic step (see the longer comment history in this file for why). This version adds a
- * guard found after shipping: the budget pool has no TTL (Slice 1b: "budget is lifetime
- * state, it must outlive any agent"), but no-TTL does not mean it cannot be deleted by
- * something outside the library (an operator, a future pool-closing API, Redis eviction).
- * Redis's INCRBY on a missing key does not error — it silently recreates the key at the
- * refund value, which would either hand out budget nobody authorized (positive refund) or
- * create a negative pool from nothing (negative refund), with no signal to the caller either
- * way. This script now checks EXISTS on the pool before refunding.
- *
- * Chosen behavior on a missing pool (option B, not A): the reservation still resolves fully
- * (concurrency released, sorted-set entry removed, marked resolved) so it is never left
- * permanently stuck and its concurrency slot is never held forever — only the refund itself
- * is skipped, and the caller is told via poolMissing so the anomaly is visible rather than
- * silent.
+ * A resolved reservation that was flagged as a probe (isProbe='1', stamped by requestPermission
+ * when it admitted this call as the probe for an open circuit) gets special handling: success
+ * closes the circuit and clears the window (recovery confirmed); failure does nothing extra
+ * here (it was already recorded as a retryable failure above, if retryable was true) — the
+ * circuit just stays open and waits for the next probe draw.
  */
 const REPORT_OUTCOME = defineScript(
   `
-local r = redis.call('HMGET', KEYS[1], 'resolved', 'estimatedCost', 'budgetKey', 'target')
+local r = redis.call('HMGET', KEYS[1], 'resolved', 'estimatedCost', 'budgetKey', 'target', 'isProbe')
 if not r[2] then
   return {0, 'unknown_reservation'}
 end
@@ -73,6 +63,8 @@ end
 local estimatedCost = tonumber(r[2])
 local success = ARGV[2] == '1'
 local costGiven = ARGV[3] == '1'
+local retryable = ARGV[6] == '1'
+local isProbe = r[5] == '1'
 local refund
 local costUnknown = 0
 
@@ -98,20 +90,33 @@ redis.call('DECR', KEYS[3])
 redis.call('HSET', KEYS[1], 'resolved', '1', 'resolvedAt', ARGV[5], 'costUnknown', tostring(costUnknown))
 redis.call('ZREM', KEYS[4], ARGV[1])
 
+if not success and retryable then
+  redis.call('ZADD', KEYS[5], ARGV[5], ARGV[1])
+  redis.call('ZREMRANGEBYSCORE', KEYS[5], '-inf', tonumber(ARGV[5]) - tonumber(ARGV[7]))
+end
+
+if isProbe then
+  if success then
+    redis.call('SET', KEYS[6], 'closed')
+    redis.call('DEL', KEYS[5])
+  end
+  -- a failed probe needs no extra action: it was recorded above (if retryable), state stays open
+end
+
 return {1, costUnknown, poolMissing}
 `,
-  4,
+  6,
 );
 
 function validate(input: unknown): asserts input is ReportOutcomeInput {
   if (input === null || typeof input !== "object") {
     throw new BrokerArgumentError("reportOutcome() expects an options object");
   }
-  const allowed = new Set(["reservationId", "success", "actualCost"]);
+  const allowed = new Set(["reservationId", "success", "actualCost", "retryable"]);
   for (const field of Object.keys(input)) {
     if (!allowed.has(field)) throw new BrokerArgumentError(`reportOutcome() does not accept "${field}"`);
   }
-  const { reservationId, success, actualCost } = input as Record<string, unknown>;
+  const { reservationId, success, actualCost, retryable } = input as Record<string, unknown>;
   if (typeof reservationId !== "string" || reservationId.length === 0) {
     throw new BrokerArgumentError("reservationId must be a non-empty string");
   }
@@ -121,6 +126,14 @@ function validate(input: unknown): asserts input is ReportOutcomeInput {
   if (actualCost !== undefined && (!Number.isSafeInteger(actualCost) || (actualCost as number) < 0)) {
     throw new BrokerArgumentError(`actualCost must be a non-negative integer, got ${String(actualCost)}`);
   }
+  if (success === false && typeof retryable !== "boolean") {
+    throw new BrokerArgumentError(
+      "retryable (boolean) is required when success is false: the circuit breaker needs to know whether this failure was the target's fault",
+    );
+  }
+  if (success === true && retryable !== undefined) {
+    throw new BrokerArgumentError("retryable is only meaningful when success is false");
+  }
 }
 
 export async function reportOutcome(
@@ -129,32 +142,36 @@ export async function reportOutcome(
 ): Promise<Resolved | ReportDenial> {
   validate(input);
 
-  // budgetKey/target aren't needed by TypeScript here (the script reads them from the
-  // reservation hash itself), but concurrency's key must be built outside Lua, same
-  // constraint as in requestPermission. We need target+budgetKey before calling the script,
-  // so we read them first. This mirrors requestPermission's budgetKey read: the values are
-  // immutable on an unresolved reservation, so a separate read cannot go stale in a way that
-  // matters — only 'does this reservation still exist / is it already resolved' can change
-  // between this read and the script's write, and the script re-checks both atomically.
   const [budgetKey, target] = await config.redis.hmget(keys.reservation(input.reservationId), "budgetKey", "target");
   if (!budgetKey || !target) {
-  return { allowed: false, reason: "unknown_reservation" };
-}
+    return { allowed: false, reason: "unknown_reservation" };
+  }
 
   const reply = await runScript(
     config.redis,
     REPORT_OUTCOME,
-    [keys.reservation(input.reservationId), keys.budget(budgetKey), keys.concurrency(target, budgetKey), keys.reservationsExpiring()],
+    [
+      keys.reservation(input.reservationId),
+      keys.budget(budgetKey),
+      keys.concurrency(target, budgetKey),
+      keys.reservationsExpiring(),
+      keys.circuit(target),
+      keys.circuitState(target),
+    ],
     [
       input.reservationId,
       input.success ? "1" : "0",
       input.actualCost !== undefined ? "1" : "0",
       input.actualCost ?? 0,
       Date.now(),
+      input.retryable ? "1" : "0",
+      config.circuitBreaker.windowMs,
+      config.circuitBreaker.softThreshold,
+      config.circuitBreaker.hardThreshold,
     ],
   );
 
-    if (Array.isArray(reply)) {
+  if (Array.isArray(reply)) {
     const [status, a, b] = reply as unknown[];
     if (status === 0 && (a === "unknown_reservation" || a === "already_resolved")) {
       return { allowed: false, reason: a };

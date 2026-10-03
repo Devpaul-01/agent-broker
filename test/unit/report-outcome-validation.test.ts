@@ -23,6 +23,13 @@ describe("reportOutcome() validation", () => {
   it("rejects an unknown field", async () => {
     await expect(reportOutcome(config, { reservationId: "r", success: true, foo: 1 } as never)).rejects.toThrow("foo");
   });
+    it.each([
+    ["success false without retryable", { reservationId: "r", success: false }],
+    ["success true with retryable present", { reservationId: "r", success: true, retryable: true }],
+    ["retryable non-boolean", { reservationId: "r", success: false, retryable: "yes" }],
+  ])("rejects: %s", async (_label, input) => {
+    await expect(reportOutcome(config, input as never)).rejects.toBeInstanceOf(BrokerArgumentError);
+  });
 
   it("accepts actualCost: 0 as valid (a call that genuinely cost nothing)", async () => {
     // Would reach Redis next and throw a TypeError on the fake client — proves validation passed.
