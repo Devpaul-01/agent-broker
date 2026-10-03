@@ -171,8 +171,6 @@ export async function requestPermission(
 ): Promise<Admitted | Denied> {
   validate(input);
 
-  await sweepExpiredReservations(config);
-
   const ttl = input.ttl ?? config.defaultReservationTtl;
   if (ttl > config.maxReservationTtl) {
     throw new BrokerArgumentError(
@@ -180,9 +178,9 @@ export async function requestPermission(
     );
   }
 
-  // budgetKey is immutable once set (ADR-20), so reading it here, separately from the atomic
-  // existence check inside the script, cannot go stale. Only "does the agent still exist" can
-  // change between this read and the script's write, and the script re-checks that itself.
+  // All pure-argument validation is done; everything from here on touches Redis.
+  await sweepExpiredReservations(config);
+
   const budgetKey = await config.redis.hget(keys.agent(input.agentId), "budgetKey");
   if (budgetKey === null) {
     return { allowed: false, reason: "unknown_agent" };
