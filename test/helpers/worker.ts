@@ -10,7 +10,7 @@ import { TEST_REDIS_URL } from "./redis.js";
 import { Redis } from "ioredis";
 
 export interface WorkerTask {
-  task: "requestPermission" | "registerChild" | "registerRoot";
+  task: "requestPermission" | "reportOutcome" | "registerChild" | "registerRoot";
   params: Record<string, unknown>;
 }
 export type WorkerResult = { ok: true; result: unknown } | { ok: false; error: string };
@@ -23,9 +23,12 @@ async function run(): Promise<void> {
   process.on("message", async (msg: WorkerTask) => {
     try {
       let result: unknown;
-      switch (msg.task) {
+            switch (msg.task) {
         case "requestPermission":
-          result = await broker.requestPermission(msg.params as Parameters<typeof broker.requestPermission>[0]);
+          result = await broker.requestPermission(msg.params as unknown as Parameters<typeof broker.requestPermission>[0]);
+          break;
+        case "reportOutcome":
+          result = await broker.reportOutcome(msg.params as unknown as Parameters<typeof broker.reportOutcome>[0]);
           break;
         case "registerChild":
           result = await broker.register(msg.params as { parentId: string });
