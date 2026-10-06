@@ -1,5 +1,7 @@
 import type { ResolvedConfig } from "../config/index.js";
+import { fireHook } from "../hooks/fire.js";
 import { keys } from "../redis/keys.js";
+import { hmgetBudgetKeyAndTarget } from "../redis/hmget2.js";
 import { resolveReservation } from "./resolve-reservation.js";
 
 // Bounded per-call work: each requestPermission call sweeps at most this many expired-but-
@@ -12,7 +14,7 @@ const CLEANUP_BATCH_SIZE = 5;
 /**
  * Finds reservations whose logical expiry (the reservationsExpiring sorted-set score) has
  * passed, and resolves any that were never reported. Triggered from inside requestPermission,
- * not from a background timer (ADR-15: lazy, not event-driven).
+ * not from a background timer (ADR-15 / ADR-0001: lazy, not event-driven).
  *
  * An abandoned reservation is resolved as success: false, no actualCost (full refund) — the
  * conservative choice, since the broker has no evidence either way about whether the call
@@ -25,6 +27,10 @@ const CLEANUP_BATCH_SIZE = 5;
  * (reportOutcome won the race, or a prior sweep already handled it) is simply removed from
  * the sorted set with no refund — resolveReservation's own idempotency check (not this
  * function) is what makes that safe under concurrent cleanup/reportOutcome calls.
+ *
+ * onCleanup fires only when a sweep actually resolves a genuine orphan, not on every sweep —
+ * most sweeps in a healthy system find nothing, and firing on an empty or already-resolved
+ * candidate would make the hook noisy without carrying any real signal.
  */
 export async function sweepExpiredReservations(config: ResolvedConfig): Promise<void> {
   const now = Date.now();
@@ -40,21 +46,24 @@ export async function sweepExpiredReservations(config: ResolvedConfig): Promise<
 
   await Promise.all(
     candidates.map(async (reservationId) => {
-      const [budgetKey, target] = await config.redis.hmget(keys.reservation(reservationId), "budgetKey", "target");
-      if (!budgetKey || !target ) {
+      const fields = await hmgetBudgetKeyAndTarget(config.redis, keys.reservation(reservationId));
+      if (fields === null) {
         // Hash already gone (past grace period) — nothing to refund, just drop the stale
         // sorted-set entry so future sweeps don't keep rediscovering it.
         await config.redis.zrem(keys.reservationsExpiring(), reservationId);
         return;
       }
-      await resolveReservation(config, {
+      const outcome = await resolveReservation(config, {
         reservationId,
-        budgetKey,
-        target,
+        budgetKey: fields.budgetKey,
+        target: fields.target,
         success: false,
         feedsCircuit: false,
         windowMs: config.circuitBreaker.windowMs,
       });
+      if (outcome.resolved) {
+        fireHook(config.hooks.onCleanup, { reservationId, target: fields.target, budgetKey: fields.budgetKey });
+      }
     }),
   );
 }
