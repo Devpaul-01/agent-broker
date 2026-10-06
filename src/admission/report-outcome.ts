@@ -5,19 +5,20 @@ import { defineScript, runScript } from "../redis/script.js";
 import { resolveReservation } from "./resolve-reservation.js";
 
 export interface ReportOutcomeInput {
-  reservationId: string;
+  /** null is a defined no-op: pass the reservationId you got back from a degraded admission
+   * (requestPermission with onRedisUnavailable: 'allow' during a Redis outage), where no
+   * reservation was ever created. Calling reportOutcome(null) resolves immediately with no
+   * Redis call, rather than requiring callers to remember not to call it at all. */
+  reservationId: string | null;
   success: boolean;
   actualCost?: number;
-  /** Required when success is false: was this failure the target's fault and worth retrying
-   * (timeout, 5xx), or not (a local validation error, a 4xx)? Only retryable failures count
-   * toward the circuit breaker's sliding window — this is what lets requestPermission tell
-   * "target is struggling" apart from "caller made a bad call" (Section 16). */
   retryable?: boolean;
 }
 export interface Resolved {
   allowed: true;
   costUnknown: boolean;
   poolMissing: boolean;
+  degraded?: boolean;
 }
 export type ReportDenialReason = "unknown_reservation" | "already_resolved";
 export interface ReportDenial {
@@ -57,7 +58,22 @@ export async function reportOutcome(
   config: ResolvedConfig,
   input: ReportOutcomeInput,
 ): Promise<Resolved | ReportDenial> {
+  if (input !== null && typeof input === "object" && input.reservationId === null) {
+    // Explicit no-op: see ReportOutcomeInput.reservationId's doc comment. Still validate the
+    // rest of the shape so a genuinely malformed call doesn't silently succeed via this path.
+    if (typeof input.success !== "boolean") {
+      throw new BrokerArgumentError(`success must be a boolean, got ${String(input.success)}`);
+    }
+    return { allowed: true, costUnknown: true, poolMissing: false, degraded: true };
+  }
   validate(input);
+
+ const reservationId = input.reservationId;
+  if (typeof reservationId !== "string") {
+    // unreachable after validate(), but narrows the type for the compiler
+    throw new BrokerArgumentError("reservationId must be a non-empty string");
+  }
+  
 
   const [budgetKey, target] = await config.redis.hmget(keys.reservation(input.reservationId), "budgetKey", "target");
   if (!budgetKey || !target) {
