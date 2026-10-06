@@ -1,6 +1,38 @@
 import type { Redis } from "ioredis";
 import { BrokerConfigError } from "../errors/index.js";
 
+
+export interface BrokerHooks {
+  onDecision?: (event: { agentId: string; target: string; result: unknown }) => void;
+  onOutcome?: (event: { reservationId: string | null; result: unknown }) => void;
+  onCircuitStateChange?: (event: { target: string; state: "open" | "closed" }) => void;
+  onCleanup?: (event: { reservationId: string; target: string; budgetKey: string }) => void;
+}
+
+export interface BrokerOptions {
+  redis: Redis;
+  maxDepth?: number;
+  agentTtl?: number;
+  defaultReservationTtl?: number;
+  maxReservationTtl?: number;
+  concurrencyLimit?: number;
+  onRedisUnavailable?: "deny" | "allow";
+  circuitBreaker?: CircuitBreakerOptions;
+  hooks?: BrokerHooks;
+}
+
+export interface ResolvedConfig {
+  readonly redis: Redis;
+  readonly maxDepth: number;
+  readonly agentTtl: number;
+  readonly defaultReservationTtl: number;
+  readonly maxReservationTtl: number;
+  readonly concurrencyLimit: number;
+  readonly onRedisUnavailable: "deny" | "allow";
+  readonly circuitBreaker: Readonly<Required<CircuitBreakerOptions>>;
+  readonly hooks: Readonly<BrokerHooks>;
+}
+
 export interface CircuitBreakerOptions {
   softThreshold?: number;
   hardThreshold?: number;
@@ -18,27 +50,7 @@ export interface BrokerOptions {
   circuitBreaker?: CircuitBreakerOptions;
 }
 
-export interface ResolvedConfig {
-  readonly redis: Redis;
-  readonly maxDepth: number;
-  readonly agentTtl: number;
-  readonly defaultReservationTtl: number;
-  readonly maxReservationTtl: number;
-  readonly concurrencyLimit: number;
-  readonly onRedisUnavailable: "deny" | "allow";
-  readonly circuitBreaker: Readonly<Required<CircuitBreakerOptions>>;
-}
 
-
-export interface ResolvedConfig {
-  readonly redis: Redis;
-  readonly maxDepth: number;
-  readonly agentTtl: number;
-  readonly defaultReservationTtl: number;
-  readonly maxReservationTtl: number;
-  readonly onRedisUnavailable: "deny" | "allow";
-  readonly circuitBreaker: Readonly<Required<CircuitBreakerOptions>>;
-}
 
 function int(name: string, value: number | undefined, fallback: number, min: number): number {
   const v = value ?? fallback;
@@ -93,16 +105,17 @@ export function parseConfig(options: BrokerOptions): ResolvedConfig {
     );
   }
 
-  // Copy values into a fresh frozen object: later mutation of the caller's options must not
-  // change a live broker (ADR-19).
-    return Object.freeze({
+  const hooks = options.hooks ?? {};
+  for (const [name, fn] of Object.entries(hooks)) {
+    if (fn !== undefined && typeof fn !== "function") {
+      throw new BrokerConfigError(`hooks.${name} must be a function, got ${typeof fn}`);
+    }
+  }
+
+  return Object.freeze({
     redis: options.redis,
-    maxDepth,
-    agentTtl,
-    defaultReservationTtl,
-    maxReservationTtl,
-    concurrencyLimit,
-    onRedisUnavailable,
+    maxDepth, agentTtl, defaultReservationTtl, maxReservationTtl, concurrencyLimit, onRedisUnavailable,
     circuitBreaker: Object.freeze({ softThreshold, hardThreshold, windowMs, probeRate }),
+    hooks: Object.freeze({ ...hooks }),
   });
 }

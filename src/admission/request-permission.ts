@@ -4,6 +4,7 @@ import { BrokerArgumentError, BrokerError } from "../errors/index.js";
 import { keys } from "../redis/keys.js";
 import { sweepExpiredReservations } from "./cleanup.js";
 import { defineScript, runScript } from "../redis/script.js";
+import { fireHook } from "../hooks/fire.js";
 import { isRedisUnavailableError } from "../redis/unavailable.js";
 
 export interface RequestPermissionInput {
@@ -99,6 +100,8 @@ local hardThreshold = tonumber(ARGV[13])
 local state = redis.call('GET', KEYS[7])
 
 local isProbe = false
+local justOpened = false
+
 if state == 'open' then
   if tonumber(ARGV[15]) < tonumber(ARGV[14]) then
     isProbe = true
@@ -107,7 +110,8 @@ if state == 'open' then
   end
 elseif failureCount >= hardThreshold then
   redis.call('SET', KEYS[7], 'open')
-  return {0, 'circuit_open'}
+  justOpened = true
+  return {0, 'circuit_open', '1'}
 end
 
 local cost = tonumber(ARGV[2])
@@ -181,10 +185,12 @@ export async function requestPermission(
   try {
     await sweepExpiredReservations(config);
 
-    const budgetKey = await config.redis.hget(keys.agent(input.agentId), "budgetKey");
-    if (budgetKey === null) {
-      return { allowed: false, reason: "unknown_agent" };
-    }
+      const budgetKey = await config.redis.hget(keys.agent(input.agentId), "budgetKey");
+      if (budgetKey === null) {
+        const result: Denied = { allowed: false, reason: "unknown_agent" };
+    fireHook(config.hooks.onDecision, { agentId: input.agentId, target: input.target, result });
+    return result;
+  }
 
     const reservationId = randomUUID();
     const cb = config.circuitBreaker;
@@ -207,27 +213,35 @@ export async function requestPermission(
       ],
     );
 
-    if (Array.isArray(reply)) {
-      const [status, a] = reply as unknown[];
-      if (status === 0) {
-        const reason = a as DenialReason;
-        if (reason === "unknown_agent" || reason === "budget_exceeded" || reason === "concurrency_exceeded" || reason === "circuit_open") {
-          return { allowed: false, reason };
-        }
+     if (Array.isArray(reply)) {
+    const [status, a, b] = reply as unknown[];
+    if (status === 0) {
+      const reason = a as DenialReason;
+      if (reason === "circuit_open" && b === "1") {
+        fireHook(config.hooks.onCircuitStateChange, { target: input.target, state: "open" });
       }
-      if (status === 1) {
-        return a === undefined
-          ? { allowed: true, reservationId }
-          : { allowed: true, reservationId, retryAfter: a as number };
+      if (reason === "unknown_agent" || reason === "budget_exceeded" || reason === "concurrency_exceeded" || reason === "circuit_open") {
+        const result: Denied = { allowed: false, reason };
+        fireHook(config.hooks.onDecision, { agentId: input.agentId, target: input.target, result });
+        return result;
       }
     }
+    if (status === 1) {
+      const result: Admitted = a === undefined
+        ? { allowed: true, reservationId }
+        : { allowed: true, reservationId, retryAfter: a as number };
+      fireHook(config.hooks.onDecision, { agentId: input.agentId, target: input.target, result });
+      return result;
+    }
+  }
     throw new BrokerError(`unexpected reply from request-permission script: ${JSON.stringify(reply)}`);
-  } catch (error) {
-    if (!isRedisUnavailableError(error)) throw error; // real bugs still throw, never swallowed here
+    } catch (error) {
+    if (!isRedisUnavailableError(error)) throw error;
 
-    if (config.onRedisUnavailable === "allow") {
-      return { allowed: true, reservationId: null, degraded: true };
-    }
-    return { allowed: false, reason: "redis_unavailable" };
+    const result: Admitted | Denied = config.onRedisUnavailable === "allow"
+      ? { allowed: true, reservationId: null, degraded: true }
+      : { allowed: false, reason: "redis_unavailable" };
+    fireHook(config.hooks.onDecision, { agentId: input.agentId, target: input.target, result });
+    return result;
   }
 }

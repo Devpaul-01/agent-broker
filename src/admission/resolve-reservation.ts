@@ -2,11 +2,12 @@
 import { BrokerError } from "../errors/index.js";
 import { keys } from "../redis/keys.js";
 import { defineScript, runScript } from "../redis/script.js";
-
+import { fireHook } from "../hooks/fire.js";
 export interface ResolveOutcome {
   resolved: true;
   costUnknown: boolean;
   poolMissing: boolean;
+  circuitClosed: boolean;
 }
 export type ResolveSkipReason = "unknown_reservation" | "already_resolved";
 export interface ResolveSkipped {
@@ -86,10 +87,11 @@ if isProbe and feedsCircuit then
   if success then
     redis.call('SET', KEYS[6], 'closed')
     redis.call('DEL', KEYS[5])
+    return {1, costUnknown, poolMissing, '1'}
   end
 end
 
-return {1, costUnknown, poolMissing}
+return {1, costUnknown, poolMissing, '0'}
 `,
   6,
 );
@@ -132,12 +134,15 @@ export async function resolveReservation(
     ],
   );
 
-  if (Array.isArray(reply)) {
-    const [status, a, b] = reply as unknown[];
+    if (Array.isArray(reply)) {
+    const [status, a, b, c] = reply as unknown[];
     if (status === 0 && (a === "unknown_reservation" || a === "already_resolved")) {
       return { resolved: false, reason: a };
     }
-    if (status === 1) return { resolved: true, costUnknown: a === 1, poolMissing: b === 1 };
+    if (status === 1) {
+      if (c === "1") fireHook(config.hooks.onCircuitStateChange, { target: params.target, state: "closed" });
+      return { resolved: true, costUnknown: a === 1, poolMissing: b === 1, circuitClosed: c === "1" };
+    }
   }
   throw new BrokerError(`unexpected reply from resolve-reservation script: ${JSON.stringify(reply)}`);
 }
