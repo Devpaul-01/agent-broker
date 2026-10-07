@@ -6,3 +6,5 @@ export type { ChildAgent, RegisterChildInput, RegisterDenial, RegisterDenialReas
 export type { Admitted, Denied, DenialReason, RequestPermissionInput } from "./admission/request-permission.js";
 export { BrokerArgumentError, BrokerConfigError, BrokerError } from "./errors/index.js";
 export type { ReportDenialReason, ReportOutcomeInput, Resolved, ReportDenial } from "./admission/report-outcome.js";
+export type { DeregisterResult } from "./agents/deregister.js";
+export type { AddBudgetResult, AddBudgetDenial, AddBudgetDenialReason } from "./budget/add-budget.js";
