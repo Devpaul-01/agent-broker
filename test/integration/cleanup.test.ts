@@ -1,10 +1,11 @@
 import type { Redis } from "ioredis";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { registerRoot } from "../../src/agents/register.js";
-import { requestPermission, type Admitted } from "../../src/admission/request-permission.js";
+import { requestPermission } from "../../src/admission/request-permission.js";
 import { reportOutcome } from "../../src/admission/report-outcome.js";
 import { parseConfig } from "../../src/config/index.js";
 import { keys } from "../../src/redis/keys.js";
+import { asReserved } from "../helpers/admit.js";
 import { connectTestRedis } from "../helpers/redis.js";
 
 describe("lazy cleanup of abandoned reservations (real Redis)", () => {
@@ -24,7 +25,7 @@ describe("lazy cleanup of abandoned reservations (real Redis)", () => {
 
   async function abandon(budget: number, cost: number) {
     const agent = await registerRoot(config, { budgetKey: `k${Math.random()}`, initialBudget: budget }).then((r) => r.agent);
-    const result = (await requestPermission(config, { agentId: agent.agentId, target: "t", estimatedCost: cost })) as Admitted;
+    const result = asReserved(await requestPermission(config, { agentId: agent.agentId, target: "t", estimatedCost: cost }));
     // Force logical expiry without waiting out the real TTL: back-date the sorted-set score.
     await redis.zadd(keys.reservationsExpiring(), Date.now() - 1, result.reservationId);
     return { agent, reservationId: result.reservationId };
@@ -47,7 +48,7 @@ describe("lazy cleanup of abandoned reservations (real Redis)", () => {
 
   it("leaves a reservation that has not logically expired yet untouched", async () => {
     const agent = await registerRoot(config, { budgetKey: `k${Math.random()}`, initialBudget: 1000 }).then((r) => r.agent);
-    const result = (await requestPermission(config, { agentId: agent.agentId, target: "t", estimatedCost: 300 })) as Admitted;
+    const result = asReserved(await requestPermission(config, { agentId: agent.agentId, target: "t", estimatedCost: 300 }));
 
     const other = await registerRoot(config, { budgetKey: `other-${Math.random()}`, initialBudget: 10 }).then((r) => r.agent);
     await requestPermission(config, { agentId: other.agentId, target: "unrelated", estimatedCost: 1 });
@@ -60,7 +61,7 @@ describe("lazy cleanup of abandoned reservations (real Redis)", () => {
     const cfg = parseConfig({ redis, circuitBreaker: { softThreshold: 2, hardThreshold: 3, windowMs: 60_000, probeRate: 0.0001 } });
     for (let i = 0; i < 5; i++) {
       const agent = await registerRoot(cfg, { budgetKey: `k${i}-${Math.random()}`, initialBudget: 1000 }).then((r) => r.agent);
-      const result = (await requestPermission(cfg, { agentId: agent.agentId, target: "shared-target", estimatedCost: 1 })) as Admitted;
+      const result = asReserved(await requestPermission(cfg, { agentId: agent.agentId, target: "shared-target", estimatedCost: 1 }));
       await redis.zadd(keys.reservationsExpiring(), Date.now() - 1, result.reservationId);
     }
     // Trigger sweeps against all 5 abandoned reservations.
@@ -99,7 +100,7 @@ describe("lazy cleanup of abandoned reservations (real Redis)", () => {
     );
     const reservations: string[] = [];
     for (const agent of agents) {
-      const result = (await requestPermission(config, { agentId: agent.agentId, target: "t", estimatedCost: 10 })) as Admitted;
+      const result = asReserved(await requestPermission(config, { agentId: agent.agentId, target: "t", estimatedCost: 10 }));
       await redis.zadd(keys.reservationsExpiring(), Date.now() - 1, result.reservationId);
       reservations.push(result.reservationId);
     }
