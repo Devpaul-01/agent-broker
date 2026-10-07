@@ -93,11 +93,7 @@ describe("requestPermission (real Redis)", () => {
     expect(result).toEqual({ allowed: false, reason: "circuit_open" });
   });
 
-  
-
-  
-
-    it("denies concurrency_exceeded once the limit is reached, leaving budget untouched", async () => {
+  it("denies concurrency_exceeded once the limit is reached, leaving budget untouched", async () => {
     const agent = await registerRoot(parseConfig({ redis, concurrencyLimit: 2 }), {
       budgetKey: `conc-${Math.random()}`, initialBudget: 1000,
     }).then((r) => r.agent);
@@ -114,7 +110,6 @@ describe("requestPermission (real Redis)", () => {
     // The third call's cost must not have been reserved from the budget.
     expect(await redis.get(keys.budget(agent.budgetKey))).toBe("980");
   });
-  
 
   it("scopes concurrency per (target, budgetKey): a different target is unaffected by the same agent's limit", async () => {
     const agent = await registerRoot(parseConfig({ redis, concurrencyLimit: 1 }), {
@@ -156,7 +151,7 @@ describe("requestPermission (real Redis)", () => {
     const result = await requestPermission(config, { agentId: agent.agentId, target: "groq:llama", estimatedCost: 300 });
 
     expect(result).toEqual({ allowed: true, reservationId: expect.any(String) });
-    if (!result.allowed) throw new Error("unreachable");
+    if (!result.allowed || result.reservationId === null) throw new Error("unreachable");
 
     expect(await redis.get(keys.budget(agent.budgetKey))).toBe("700");
 
