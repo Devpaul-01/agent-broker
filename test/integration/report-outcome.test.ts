@@ -1,10 +1,11 @@
 import type { Redis } from "ioredis";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { registerRoot } from "../../src/agents/register.js";
-import { requestPermission, type Admitted } from "../../src/admission/request-permission.js";
+import { requestPermission } from "../../src/admission/request-permission.js";
 import { reportOutcome } from "../../src/admission/report-outcome.js";
 import { parseConfig } from "../../src/config/index.js";
 import { keys } from "../../src/redis/keys.js";
+import { asReserved } from "../helpers/admit.js";
 import { connectTestRedis } from "../helpers/redis.js";
 
 describe("reportOutcome (real Redis)", () => {
@@ -24,8 +25,7 @@ describe("reportOutcome (real Redis)", () => {
 
   async function admitted(budget: number, cost: number): Promise<{ budgetKey: string; reservationId: string }> {
     const agent = await registerRoot(config, { budgetKey: `k${Math.random()}`, initialBudget: budget }).then((r) => r.agent);
-    const result = (await requestPermission(config, { agentId: agent.agentId, target: "t", estimatedCost: cost })) as Admitted;
-    if (!result.allowed) throw new Error("setup: expected admission");
+    const result = asReserved(await requestPermission(config, { agentId: agent.agentId, target: "t", estimatedCost: cost }));
     return { budgetKey: agent.budgetKey, reservationId: result.reservationId };
   }
 
@@ -69,7 +69,7 @@ describe("reportOutcome (real Redis)", () => {
 
   it("releases the concurrency slot on resolution, regardless of success", async () => {
     const agent = await registerRoot(config, { budgetKey: `k${Math.random()}`, initialBudget: 1000 }).then((r) => r.agent);
-    const result = (await requestPermission(config, { agentId: agent.agentId, target: "shared", estimatedCost: 10 })) as Admitted;
+    const result = asReserved(await requestPermission(config, { agentId: agent.agentId, target: "shared", estimatedCost: 10 }));
 
     expect(await redis.get(keys.concurrency("shared", agent.budgetKey))).toBe("1");
     await reportOutcome(config, { reservationId: result.reservationId, success: false });
@@ -146,7 +146,7 @@ describe("reportOutcome (real Redis)", () => {
 
   it("releases the concurrency slot even when the budget pool is missing", async () => {
     const agent = await registerRoot(config, { budgetKey: `k${Math.random()}`, initialBudget: 1000 }).then((r) => r.agent);
-    const result = (await requestPermission(config, { agentId: agent.agentId, target: "shared", estimatedCost: 10 })) as Admitted;
+    const result = asReserved(await requestPermission(config, { agentId: agent.agentId, target: "shared", estimatedCost: 10 }));
     await redis.del(keys.budget(agent.budgetKey));
 
     await reportOutcome(config, { reservationId: result.reservationId, success: false });
