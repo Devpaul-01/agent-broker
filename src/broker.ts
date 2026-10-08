@@ -4,6 +4,8 @@ import { type Admitted, type Denied, requestPermission as requestPermissionImpl,
 import { requestPermissionQueued, type QueueOptions } from "./admission/queue.js";
 import { type Resolved, type ReportDenial, reportOutcome as reportOutcomeImpl, type ReportOutcomeInput } from "./admission/report-outcome.js";
 import { type BrokerOptions, parseConfig } from "./config/index.js";
+import { deregister, type DeregisterResult } from "./agents/deregister.js";
+import { addBudget, type AddBudgetResult, type AddBudgetDenial } from "./budget/add-budget.js";
 
 export interface Broker {
   register(input: RegisterRootInput): Promise<RootAgent>;
@@ -15,15 +17,6 @@ export interface Broker {
   addBudget(budgetKey: string, amount: number): Promise<AddBudgetResult | AddBudgetDenial>;
 }
 
-
-async function requestPermissionDispatch(
-    input: RequestPermissionInput,
-    queueOptions?: QueueOptions,
-  ): Promise<Admitted | Denied> {
-    if (queueOptions === undefined) return requestPermissionImpl(config, input);
-    return requestPermissionQueued(config, input, queueOptions, requestPermissionImpl);
-  }
-
 export function createBroker(options: BrokerOptions): Broker {
   const config = parseConfig(options);
 
@@ -34,6 +27,14 @@ export function createBroker(options: BrokerOptions): Broker {
       return registerChild(config, input);
     }
     return (await registerRoot(config, input)).agent;
+  }
+
+  async function requestPermissionDispatch(
+    input: RequestPermissionInput,
+    queueOptions?: QueueOptions,
+  ): Promise<Admitted | Denied> {
+    if (queueOptions === undefined) return requestPermissionImpl(config, input);
+    return requestPermissionQueued(config, input, queueOptions, requestPermissionImpl);
   }
 
   return Object.freeze({
