@@ -87,8 +87,7 @@ const RESERVATION_GRACE_MS = 5_000;
  * Nothing is written on any denial path.
  */
 const REQUEST_PERMISSION = defineScript(
-  `
-if redis.call('EXISTS', KEYS[1]) == 0 then
+`if redis.call('EXISTS', KEYS[1]) == 0 then
   return {0, 'unknown_agent'}
 end
 
@@ -100,17 +99,15 @@ local hardThreshold = tonumber(ARGV[13])
 local state = redis.call('GET', KEYS[7])
 
 local isProbe = false
-local justOpened = false
 
 if state == 'open' then
   if tonumber(ARGV[15]) < tonumber(ARGV[14]) then
     isProbe = true
   else
-    return {0, 'circuit_open'}
+    return {0, 'circuit_open', '0'}
   end
 elseif failureCount >= hardThreshold then
   redis.call('SET', KEYS[7], 'open')
-  justOpened = true
   return {0, 'circuit_open', '1'}
 end
 
@@ -142,9 +139,8 @@ if failureCount >= softThreshold and failureCount < hardThreshold then
   local retryAfter = math.floor(windowMs / (hardThreshold - softThreshold + 1))
   return {1, retryAfter}
 end
-return {1}
-`,
-  7,
+return {1}`
+  ,7
 );
 
 function validate(input: unknown): asserts input is RequestPermissionInput {
