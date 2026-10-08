@@ -39,16 +39,6 @@ export interface CircuitBreakerOptions {
   windowMs?: number;
   probeRate?: number;
 }
-export interface BrokerOptions {
-  redis: Redis;
-  maxDepth?: number;
-  agentTtl?: number;
-  defaultReservationTtl?: number;
-  maxReservationTtl?: number;
-  concurrencyLimit?: number;
-  onRedisUnavailable?: "deny" | "allow";
-  circuitBreaker?: CircuitBreakerOptions;
-}
 
 
 
