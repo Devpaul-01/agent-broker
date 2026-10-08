@@ -7,3 +7,5 @@ export type { Admitted, Denied, DenialReason, RequestPermissionInput } from "./a
 export { BrokerArgumentError, BrokerConfigError, BrokerError } from "./errors/index.js";
 export type { ReportDenialReason, ReportOutcomeInput, Resolved, ReportDenial } from "./admission/report-outcome.js";
 export type { QueueOptions } from "./admission/queue.js";
+export type { DeregisterResult } from "./agents/deregister.js";
+export type { AddBudgetResult, AddBudgetDenial, AddBudgetDenialReason } from "./budget/add-budget.js";
