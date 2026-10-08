@@ -10,14 +10,10 @@
 const seg = (value: string): string => `${value.length}:${value}`;
 export const keys = {
   agent: (agentId: string) => `agent:${agentId}`,
-    circuitState: (target: string) => `circuit:${seg(target)}:state`,
   budget: (budgetKey: string) => `budget:${seg(budgetKey)}`,
   reservation: (reservationId: string) => `reservation:${reservationId}`,
-  // Logical expiry index, separate from the reservation hash's own Redis-level TTL.
-  // One sorted set total (not per-reservation): member = reservationId, score = expiresAt (ms).
-  // Lets lazy cleanup find expired-but-unresolved reservations without scanning all keys.
   reservationsExpiring: () => `reservations:expiring`,
   concurrency: (target: string, budgetKey: string) => `concurrency:${seg(target)}${seg(budgetKey)}`,
-  retries: (target: string) => `retries:${seg(target)}`,
   circuit: (target: string) => `circuit:${seg(target)}`,
+  circuitState: (target: string) => `circuit:${seg(target)}:state`,
 };
