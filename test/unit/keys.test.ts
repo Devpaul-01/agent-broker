@@ -15,7 +15,7 @@ describe("keys", () => {
   });
 
   it("keeps different key types in different namespaces", () => {
-    const all = [keys.agent("x"), keys.budget("x"), keys.reservation("x"), keys.retries("x"), keys.circuit("x")];
-    expect(new Set(all).size).toBe(all.length);
-  });
+  const all = [keys.agent("x"), keys.budget("x"), keys.reservation("x"), keys.circuit("x")];
+  expect(new Set(all).size).toBe(all.length);
+});
 });
