@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { registerRoot } from "../../src/agents/register.js";
 import { parseConfig } from "../../src/config/index.js";
+import { keys } from "../../src/redis/keys.js";
 import { connectTestRedis } from "../helpers/redis.js";
 import { killAll, spawnWorkers, type WorkerHandle } from "../helpers/harness.js";
 
@@ -36,7 +37,7 @@ describe("cross-process test harness (real Redis, real child processes)", () => 
     const result = await workers[0]!.run({ task: "registerRoot", params: { budgetKey: "visibility-check", initialBudget: 500 } });
     expect(result.ok).toBe(true);
 
-    const stored = await redis.get("budget:17:visibility-check"); // "visibility-check".length === 17
+    const stored = await redis.get(keys.budget("visibility-check"));
     expect(stored).toBe("500");
   });
 

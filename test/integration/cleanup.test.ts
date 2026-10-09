@@ -101,9 +101,15 @@ describe("lazy cleanup of abandoned reservations (real Redis)", () => {
     const reservations: string[] = [];
     for (const agent of agents) {
       const result = asReserved(await requestPermission(config, { agentId: agent.agentId, target: "t", estimatedCost: 10 }));
-      await redis.zadd(keys.reservationsExpiring(), Date.now() - 1, result.reservationId);
       reservations.push(result.reservationId);
     }
+    // Back-date all 8 together, only after every reservation has been created. Back-dating
+    // inside the creation loop (as a previous version of this test did) lets each subsequent
+    // iteration's own requestPermission call trigger its own lazy sweep, which would pick up
+    // the just-backdated reservation from the prior iteration one at a time — by the time the
+    // trigger call below runs, only one reservation would be left unswept, defeating the point
+    // of asserting a 5-candidate batch limit.
+    await Promise.all(reservations.map((id) => redis.zadd(keys.reservationsExpiring(), Date.now() - 1, id)));
     const trigger = await registerRoot(config, { budgetKey: `trigger-${Math.random()}`, initialBudget: 10 }).then((r) => r.agent);
     await requestPermission(config, { agentId: trigger.agentId, target: "t", estimatedCost: 1 });
 
