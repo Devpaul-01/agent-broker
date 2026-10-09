@@ -34,14 +34,14 @@ describe("reportOutcome (real Redis)", () => {
     const result = await reportOutcome(config, { reservationId, success: true, actualCost: 200 });
 
     expect(result).toEqual({ allowed: true, costUnknown: false, poolMissing: false });
-    expect(await redis.get(keys.budget(budgetKey))).toBe("900"); // 1000 - 300 + (300-200)
+    expect(await redis.get(keys.budget(budgetKey))).toBe("800"); // 1000 - 300 + (300-200)
     expect(await redis.hget(keys.reservation(reservationId), "resolved")).toBe("1");
   });
 
   it("success + actualCost greater than estimate: pushes the pool below what was reserved (allowed on reconciliation)", async () => {
     const { budgetKey, reservationId } = await admitted(1000, 300);
     await reportOutcome(config, { reservationId, success: true, actualCost: 500 });
-    expect(await redis.get(keys.budget(budgetKey))).toBe("800"); // 1000 - 300 + (300-500) = 800
+    expect(await redis.get(keys.budget(budgetKey))).toBe("500"); // 1000 - 300 + (300-500) = 500
   });
 
   it("success with no actualCost: charges the full estimate and marks costUnknown", async () => {
@@ -55,7 +55,7 @@ describe("reportOutcome (real Redis)", () => {
 
   it("failure with no actualCost: fully refunds the reservation", async () => {
     const { budgetKey, reservationId } = await admitted(1000, 300);
-    const result = await reportOutcome(config, { reservationId, success: false });
+    const result = await reportOutcome(config, { reservationId, success: false, retryable: true });
 
     expect(result).toEqual({ allowed: true, costUnknown: false, poolMissing: false });
     expect(await redis.get(keys.budget(budgetKey))).toBe("1000"); // back to original
@@ -63,7 +63,7 @@ describe("reportOutcome (real Redis)", () => {
 
   it("failure with actualCost: honors the given cost rather than assuming zero", async () => {
     const { budgetKey, reservationId } = await admitted(1000, 300);
-    await reportOutcome(config, { reservationId, success: false, actualCost: 50 });
+    await reportOutcome(config, { reservationId, success: false, actualCost: 50, retryable: true });
     expect(await redis.get(keys.budget(budgetKey))).toBe("950"); // 1000 - 300 + (300-50)
   });
 
@@ -72,7 +72,7 @@ describe("reportOutcome (real Redis)", () => {
     const result = asReserved(await requestPermission(config, { agentId: agent.agentId, target: "shared", estimatedCost: 10 }));
 
     expect(await redis.get(keys.concurrency("shared", agent.budgetKey))).toBe("1");
-    await reportOutcome(config, { reservationId: result.reservationId, success: false });
+    await reportOutcome(config, { reservationId: result.reservationId, success: false, retryable: true });
     expect(await redis.get(keys.concurrency("shared", agent.budgetKey))).toBe("0");
   });
 
@@ -149,7 +149,7 @@ describe("reportOutcome (real Redis)", () => {
     const result = asReserved(await requestPermission(config, { agentId: agent.agentId, target: "shared", estimatedCost: 10 }));
     await redis.del(keys.budget(agent.budgetKey));
 
-    await reportOutcome(config, { reservationId: result.reservationId, success: false });
+    await reportOutcome(config, { reservationId: result.reservationId, success: false, retryable: true });
     expect(await redis.get(keys.concurrency("shared", agent.budgetKey))).toBe("0");
   });
 
