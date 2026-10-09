@@ -111,30 +111,35 @@ export async function resolveReservation(
   config: ResolvedConfig,
   params: ResolveParams,
 ): Promise<ResolveOutcome | ResolveSkipped> {
-  const reply = await runScript(
-    config.redis,
-    RESOLVE_RESERVATION,
-    [
-      keys.reservation(params.reservationId),
-      keys.budget(params.budgetKey),
-      keys.concurrency(params.target, params.budgetKey),
-      keys.reservationsExpiring(),
-      keys.circuit(params.target),
-      keys.circuitState(params.target),
-    ],
-    [
-      params.reservationId,
-      params.success ? "1" : "0",
-      params.actualCost !== undefined ? "1" : "0",
-      params.actualCost ?? 0,
-      Date.now(),
-      params.retryable ? "1" : "0",
-      params.windowMs,
-      params.feedsCircuit ? "1" : "0",
-    ],
-  );
+  let reply: unknown;
+  try {
+    reply = await runScript(
+      config.redis,
+      RESOLVE_RESERVATION,
+      [
+        keys.reservation(params.reservationId),
+        keys.budget(params.budgetKey),
+        keys.concurrency(params.target, params.budgetKey),
+        keys.reservationsExpiring(),
+        keys.circuit(params.target),
+        keys.circuitState(params.target),
+      ],
+      [
+        params.reservationId,
+        params.success ? "1" : "0",
+        params.actualCost !== undefined ? "1" : "0",
+        params.actualCost ?? 0,
+        Date.now(),
+        params.retryable ? "1" : "0",
+        params.windowMs,
+        params.feedsCircuit ? "1" : "0",
+      ],
+    );
+  } catch (error) {
+    throw new BrokerError(`resolveReservation failed unexpectedly: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
 
-    if (Array.isArray(reply)) {
+  if (Array.isArray(reply)) {
     const [status, a, b, c] = reply as unknown[];
     if (status === 0 && (a === "unknown_reservation" || a === "already_resolved")) {
       return { resolved: false, reason: a };

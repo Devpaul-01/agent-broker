@@ -3,8 +3,10 @@ import { BrokerArgumentError } from "../errors/index.js";
 import { fireHook } from "../hooks/fire.js";
 import { hmgetBudgetKeyAndTarget } from "../redis/hmget2.js";
 import { keys } from "../redis/keys.js";
-import { resolveReservation } from "./resolve-reservation.js";
 
+import { BrokerError } from "../errors/index.js";
+import { resolveReservation } from "./resolve-reservation.js";
+import { isRedisUnavailableError } from "../redis/unavailable.js";
 export interface ReportOutcomeInput {
   /**
    * null is a defined no-op: pass the reservationId you got back from a degraded admission
@@ -100,18 +102,34 @@ export async function reportOutcome(
     fireHook(config.hooks.onOutcome, { reservationId, result });
     return result;
   }
+  let outcome: Awaited<ReturnType<typeof resolveReservation>>;
+  try {
+    outcome = await resolveReservation(config, {
+  reservationId,
+  budgetKey: fields.budgetKey,
+  target: fields.target,
+  success: input.success,
+  ...(input.actualCost !== undefined ? { actualCost: input.actualCost } : {}),
+  ...(input.retryable !== undefined ? { retryable: input.retryable } : {}),
+  feedsCircuit: true,
+  windowMs: config.circuitBreaker.windowMs,
+});
+  } catch (error) {
+    if (!isRedisUnavailableError(error)) throw error; // real bugs still throw, never swallowed here
 
-  const outcome = await resolveReservation(config, {
-    reservationId,
-    budgetKey: fields.budgetKey,
-    target: fields.target,
-    success: input.success,
-     ...(input.actualCost !== undefined ? { actualCost: input.actualCost } : {}),
-     ...(input.retryable !== undefined ? { retryable: input.retryable } : {}),
-    feedsCircuit: true, // an explicit report is real evidence about the target; cleanup is not
-    windowMs: config.circuitBreaker.windowMs,
-  });
-
+    // Redis is unreachable: we cannot refund, release concurrency, or mark this resolved right
+    // now. If onRedisUnavailable is 'allow', accept the loss rather than throw — the original
+    // reservation stays unresolved in Redis and will eventually be picked up by lazy cleanup
+    // once Redis is healthy again and a later requestPermission call sweeps it, same path as
+    // a crashed caller that never reported at all. If 'deny', throwing is correct: the caller
+    // explicitly opted into fail-closed behavior and should know this report did not land.
+    if (config.onRedisUnavailable === "deny") {
+      throw new BrokerError(`reportOutcome failed: Redis unreachable and onRedisUnavailable is 'deny'`, { cause: error });
+    }
+    const result: Resolved = { allowed: true, costUnknown: true, poolMissing: false, degraded: true };
+    fireHook(config.hooks.onOutcome, { reservationId, result });
+    return result;
+  }
   if (!outcome.resolved) {
     const result: ReportDenial = { allowed: false, reason: outcome.reason };
     fireHook(config.hooks.onOutcome, { reservationId, result });
