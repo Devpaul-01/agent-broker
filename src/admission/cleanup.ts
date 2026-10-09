@@ -60,6 +60,7 @@ export async function sweepExpiredReservations(config: ResolvedConfig): Promise<
         success: false,
         feedsCircuit: false,
         windowMs: config.circuitBreaker.windowMs,
+        hardThreshold: config.circuitBreaker.hardThreshold,
       });
       if (outcome.resolved) {
         fireHook(config.hooks.onCleanup, { reservationId, target: fields.target, budgetKey: fields.budgetKey });
