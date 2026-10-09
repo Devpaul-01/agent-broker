@@ -231,8 +231,11 @@ export async function requestPermission(
     }
   }
     throw new BrokerError(`unexpected reply from request-permission script: ${JSON.stringify(reply)}`);
-    } catch (error) {
-    if (!isRedisUnavailableError(error)) throw error;
+      } catch (error) {
+    if (!isRedisUnavailableError(error)) {
+      if (error instanceof BrokerArgumentError) throw error; // validation errors are already a clear, specific type — don't re-wrap them
+      throw new BrokerError(`requestPermission failed unexpectedly: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
 
     const result: Admitted | Denied = config.onRedisUnavailable === "allow"
       ? { allowed: true, reservationId: null, degraded: true }

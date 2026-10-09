@@ -13,6 +13,14 @@ describe("isRedisUnavailableError", () => {
   });
 
   it.each([
+  ["ECONNREFUSED via .code", (() => { const e = new Error("connect failed"); (e as NodeJS.ErrnoException).code = "ECONNREFUSED"; return e; })(), true],
+  ["ETIMEDOUT via .code", (() => { const e = new Error("timed out"); (e as NodeJS.ErrnoException).code = "ETIMEDOUT"; return e; })(), true],
+  ["MaxRetriesPerRequestError by name", (() => { const e = new Error("Reached the max retries per request limit (which is 20)."); e.name = "MaxRetriesPerRequestError"; return e; })(), true],
+])("treats %s as unavailable", (_label, error, expected) => {
+  expect(isRedisUnavailableError(error)).toBe(expected);
+});
+
+  it.each([
     "WRONGTYPE Operation against a key holding the wrong kind of value",
     "unexpected reply from request-permission script: null",
     "some random application error",
