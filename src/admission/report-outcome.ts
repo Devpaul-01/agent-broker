@@ -113,6 +113,7 @@ export async function reportOutcome(
   ...(input.retryable !== undefined ? { retryable: input.retryable } : {}),
   feedsCircuit: true,
   windowMs: config.circuitBreaker.windowMs,
+  hardThreshold: config.circuitBreaker.hardThreshold,
 });
   } catch (error) {
     if (!isRedisUnavailableError(error)) throw error; // real bugs still throw, never swallowed here

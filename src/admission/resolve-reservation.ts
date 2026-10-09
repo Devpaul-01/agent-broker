@@ -33,6 +33,19 @@ export interface ResolveSkipped {
  * ARGV[7] windowMs  ARGV[8] feedsCircuit ("1"/"0") — false for cleanup: an abandoned
  *   reservation is evidence the caller crashed, not that the target is failing, so cleanup
  *   must never write into the circuit breaker's window regardless of the retryable flag.
+ * ARGV[9] hardThreshold
+ *
+ * The circuit must open the moment the threshold-crossing failure is reported here, not wait
+ * for some later requestPermission call to lazily observe the count — a caller who only ever
+ * calls reportOutcome (or a test asserting on hook calls right after the Nth reportOutcome)
+ * would otherwise see a stale 'closed'/null state even though the breaker has, in substance,
+ * already tripped. So after writing this failure into the window and trimming it, we check the
+ * fresh count right here and flip state to 'open' (once, guarded by not already being 'open')
+ * if it has reached hardThreshold, firing the same onCircuitStateChange signal that
+ * requestPermission's own first-observation path fires. requestPermission still carries its own
+ * redundant hardThreshold check as a fallback (e.g. if circuitBreaker config differs between
+ * calls), but it is a no-op once this script has already set state to 'open' — it reads 'open'
+ * first and takes the probe-logic branch instead of re-setting state or re-firing the hook.
  *
  * See report-outcome.ts's prior history for the refund-formula and poolMissing reasoning,
  * unchanged here.
@@ -78,20 +91,31 @@ redis.call('DECR', KEYS[3])
 redis.call('HSET', KEYS[1], 'resolved', '1', 'resolvedAt', ARGV[5], 'costUnknown', tostring(costUnknown))
 redis.call('ZREM', KEYS[4], ARGV[1])
 
+local opened = '0'
 if feedsCircuit and not success and retryable then
   redis.call('ZADD', KEYS[5], ARGV[5], ARGV[1])
   redis.call('ZREMRANGEBYSCORE', KEYS[5], '-inf', tonumber(ARGV[5]) - tonumber(ARGV[7]))
+
+  local hardThreshold = tonumber(ARGV[9])
+  local currentState = redis.call('GET', KEYS[6])
+  if currentState ~= 'open' then
+    local failureCount = redis.call('ZCARD', KEYS[5])
+    if failureCount >= hardThreshold then
+      redis.call('SET', KEYS[6], 'open')
+      opened = '1'
+    end
+  end
 end
 
 if isProbe and feedsCircuit then
   if success then
     redis.call('SET', KEYS[6], 'closed')
     redis.call('DEL', KEYS[5])
-    return {1, costUnknown, poolMissing, '1'}
+    return {1, costUnknown, poolMissing, '1', opened}
   end
 end
 
-return {1, costUnknown, poolMissing, '0'}
+return {1, costUnknown, poolMissing, '0', opened}
 `,
   6,
 );
@@ -105,6 +129,10 @@ export interface ResolveParams {
   retryable?: boolean;
   feedsCircuit: boolean;
   windowMs: number;
+  /** Required even when feedsCircuit is false (cleanup): the script only reads this when it's
+   * about to write a retryable failure into the window, which never happens for cleanup, but
+   * the ARGV slot is always present so callers always supply the current configured value. */
+  hardThreshold: number;
 }
 
 export async function resolveReservation(
@@ -133,6 +161,7 @@ export async function resolveReservation(
         params.retryable ? "1" : "0",
         params.windowMs,
         params.feedsCircuit ? "1" : "0",
+        params.hardThreshold,
       ],
     );
   } catch (error) {
@@ -140,12 +169,13 @@ export async function resolveReservation(
   }
 
   if (Array.isArray(reply)) {
-    const [status, a, b, c] = reply as unknown[];
+    const [status, a, b, c, d] = reply as unknown[];
     if (status === 0 && (a === "unknown_reservation" || a === "already_resolved")) {
       return { resolved: false, reason: a };
     }
     if (status === 1) {
       if (c === "1") fireHook(config.hooks.onCircuitStateChange, { target: params.target, state: "closed" });
+      if (d === "1") fireHook(config.hooks.onCircuitStateChange, { target: params.target, state: "open" });
       return { resolved: true, costUnknown: a === 1, poolMissing: b === 1, circuitClosed: c === "1" };
     }
   }
