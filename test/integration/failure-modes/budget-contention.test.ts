@@ -83,9 +83,19 @@ describe("failure mode: budget contention across real processes", () => {
   it("admits every process when the budget comfortably covers all of them", async () => {
     const { agent } = await registerRoot(config, { budgetKey: "generous-budget", initialBudget: 100_000 });
 
+    // concurrencyLimit must cover all 15 simultaneous in-flight calls against this one
+    // (target, budgetKey) pair, or the default limit of 10 denies 5 of them with
+    // concurrency_exceeded regardless of how much budget is available — this test is about
+    // budget headroom specifically, so the concurrency axis is deliberately opened up wide.
     workers = await spawnWorkers(15);
     const results = await Promise.all(
-      workers.map((w) => w.run({ task: "requestPermission", params: { agentId: agent.agentId, target: "t", estimatedCost: 10 } })),
+      workers.map((w) =>
+        w.run({
+          task: "requestPermission",
+          params: { agentId: agent.agentId, target: "t", estimatedCost: 10 },
+          config: { concurrencyLimit: 15 },
+        }),
+      ),
     );
 
     expect(results.filter((r) => !r.ok)).toHaveLength(0);

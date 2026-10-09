@@ -38,7 +38,7 @@ describe("failure mode: delegation-depth enforcement across real processes", () 
     const { agent: root } = await registerRoot(config, { budgetKey: "cross-proc-root", initialBudget: 100 });
 
     workers = await spawnWorkers(1);
-    const result = await workers[0]!.run({ task: "registerChild", params: { parentId: root.agentId } });
+    const result = await workers[0]!.run({ task: "registerChild", params: { parentId: root.agentId }, config: { maxDepth: 3 } });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -53,13 +53,13 @@ describe("failure mode: delegation-depth enforcement across real processes", () 
     workers = await spawnWorkers(1);
     let parentId = root.agentId;
     for (let depth = 1; depth <= 3; depth++) {
-      const result = await workers[0]!.run({ task: "registerChild", params: { parentId } });
+      const result = await workers[0]!.run({ task: "registerChild", params: { parentId }, config: { maxDepth: 3 } });
       expect(result.ok).toBe(true);
       if (result.ok) parentId = (result.result as ChildAgent).agentId;
     }
 
     const countBefore = (await redis.keys("agent:*")).length;
-    const over = await workers[0]!.run({ task: "registerChild", params: { parentId } });
+    const over = await workers[0]!.run({ task: "registerChild", params: { parentId }, config: { maxDepth: 3 } });
 
     expect(over.ok).toBe(true); // the call itself succeeded; the library-level result is a denial
     if (over.ok) {
@@ -79,7 +79,7 @@ describe("failure mode: delegation-depth enforcement across real processes", () 
 
     workers = await spawnWorkers(2); // worker 0 = delegator, worker 1 = deleter (via a direct task)
     const [delegateResult] = await Promise.all([
-      workers[0]!.run({ task: "registerChild", params: { parentId: root.agentId } }),
+      workers[0]!.run({ task: "registerChild", params: { parentId: root.agentId }, config: { maxDepth: 3 } }),
       redis.del(keys.agent(root.agentId)), // genuinely concurrent deletion from the parent test process
     ]);
 
@@ -116,12 +116,12 @@ describe("failure mode: delegation-depth enforcement across real processes", () 
       { parentId: root.agentId, budgetKey: "fabricated-budget" },
       { parentId: root.agentId, agentId: "fabricated-agent-id" },
     ]) {
-      const result = await workers[0]!.run({ task: "registerChild", params: lie });
+      const result = await workers[0]!.run({ task: "registerChild", params: lie, config: { maxDepth: 3 } });
       expect(result.ok, JSON.stringify(result)).toBe(false); // rejected as a BrokerArgumentError, not silently accepted
     }
     // Confirm the legitimate call still works afterward — the rejections weren't incidentally
     // breaking the connection or the agent record.
-    const legit = await workers[0]!.run({ task: "registerChild", params: { parentId: root.agentId } });
+    const legit = await workers[0]!.run({ task: "registerChild", params: { parentId: root.agentId }, config: { maxDepth: 3 } });
     expect(legit.ok).toBe(true);
     if (legit.ok) expect((legit.result as ChildAgent).depth).toBe(1);
   });
