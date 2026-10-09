@@ -28,5 +28,10 @@ export function isRedisUnavailableError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
   if (code !== undefined && (CONNECTION_ERROR_CODES as readonly string[]).includes(code)) return true;
 
+  // Some errors (e.g. a raw "connect ECONNREFUSED 127.0.0.1:6379" Error constructed without a
+  // .code property, as our own unit tests do) carry the code only in the message text. Checking
+  // the codes as substrings here catches those without relying on .code being set.
+  if ((CONNECTION_ERROR_CODES as readonly string[]).some((code) => error.message.includes(code))) return true;
+
   return CONNECTION_ERROR_MESSAGE_PATTERNS.some((pattern) => error.message.includes(pattern));
 }
