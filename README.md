@@ -189,6 +189,41 @@ If you need protection against a genuinely adversarial, non-cooperating caller, 
 
 ---
 
+## Engineering highlights
+
+For a reviewer short on time, these are the mechanisms worth looking at first — each one is a
+single atomic Redis operation, not a read-then-write pair a concurrent caller could interleave
+with:
+
+- **Single-round-trip admission control.** `requestPermission` checks agent existence, circuit
+  state, budget, and concurrency, and reserves against all of them, in one Lua script —
+  `src/admission/request-permission.ts`, [ADR-0023](docs/adr/0023-single-combined-admission-script.md).
+- **Idempotent reservation reconciliation shared by two call paths.** The same script resolves a
+  reservation whether it's an explicit `reportOutcome` call or a lazy sweep discovering an
+  abandoned one, closing the class of bug where two independently-written resolution paths
+  quietly drift apart — `src/admission/resolve-reservation.ts`,
+  [ADR-0002](docs/adr/0002-reportoutcome-refund-formula.md),
+  [ADR-0003](docs/adr/0003-budget-pool-deletion-handling.md).
+- **Single-probe circuit recovery**, a deliberate simplification from an originally-planned
+  multi-state design, with the trade-off reasoned through rather than assumed —
+  [ADR-0010](docs/adr/0010-single-probe-circuit-recovery.md).
+- **Broker-derived identity closing a TOCTOU spoofing window.** A child's depth, `rootId`, and
+  `budgetKey` are re-derived from the parent's stored state inside the same atomic script that
+  creates the child — never accepted as caller input — `src/agents/register-child.ts`,
+  [ADR-0012](docs/adr/0012-broker-derived-identity-and-depth.md).
+- **Real cross-process testing**, not simulated concurrency: the test harness forks genuine OS
+  processes and verifies state visibility and error propagation across them —
+  `test/helpers/harness.ts`, `test/integration/cross-process-harness.test.ts`.
+- **Honest non-atomicity where it's actually safe.** `register()` for a root agent uses
+  `MULTI`/`EXEC`, not Lua — a deliberate, narrower choice than the Lua-backed paths above. The
+  code comment states the exact failure window (a dropped connection before reply can leave an
+  orphan agent and/or orphan budget pool) and why it's harmless, rather than glossing over it —
+  `src/agents/register.ts`.
+
+See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) for the full request
+lifecycle, Redis data model, and failure model — including diagrams of each of the mechanisms
+above.
+
 ## Project status and roadmap
 
 This library solves cross-process budget, depth, and retry-storm coordination, and that core is tested under real multi-process concurrency (see [`docs/agent-broker-architecture.md#14-testing-architecture`](docs/agent-broker-architecture.md#14-testing-architecture)). It does **not** yet have agent-aware call metadata, framework-protocol adapters (MCP or similar), or a built-in observability surface beyond the four hooks above — these are intentional, not finished, and the plan for closing that gap honestly (including why it's a layer on top rather than a rewrite) is in [`docs/positioning.md`](docs/positioning.md). If you're evaluating this for an agent-framework integration today, read that document first.
