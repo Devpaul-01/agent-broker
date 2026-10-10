@@ -34,7 +34,7 @@ describe("queue mode under multi-caller contention (real Redis)", () => {
 
     // 10 more callers queue simultaneously, all competing for the same 3 slots as they free up.
     const queuedPromises = Array.from({ length: 10 }, () =>
-      broker.requestPermission({ agentId: agent.agentId, target: "t", estimatedCost: 1 }, { mode: "queue", queueTimeout: 5000 }),
+      broker.requestPermission({ agentId: agent.agentId, target: "t", estimatedCost: 1 }, { mode: "queue", queueTimeout: 2000 }),
     );
 
     // Stagger-release the 3 held slots so queued callers have to actually wait and re-poll,
