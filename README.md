@@ -38,6 +38,8 @@ It is also not a security boundary against a malicious caller. It protects again
 npm install agent-broker ioredis
 ```
 
+Requires Node.js 22 or later, and a reachable Redis instance (local, containerized, or managed).
+
 `ioredis` is a peer dependency — you bring your own Redis connection; the library never manages one itself (see [ADR-0006](docs/adr/0006-no-owned-redis-connection.md)).
 
 ## Quick start
@@ -60,8 +62,10 @@ const decision = await broker.requestPermission({
 });
 
 if (!decision.allowed) {
-  // decision.reason: 'budget_exceeded' | 'depth_exceeded' | 'circuit_open'
-  //                | 'concurrency_exceeded' | 'unknown_agent' | 'redis_unavailable'
+  // decision.reason: 'unknown_agent' | 'aborted' | 'budget_exceeded'
+  //                | 'concurrency_exceeded' | 'circuit_open' | 'redis_unavailable' | 'queue_timeout'
+  // ('aborted' and 'queue_timeout' only apply in queue mode — see "Queue mode" below.
+  //  'depth_exceeded' is a register() reason, not a requestPermission() reason — see below.)
   throw new Error(`denied: ${decision.reason}`);
 }
 
@@ -121,6 +125,7 @@ Full mechanics, invariants, and the reasoning behind each of these are in [`docs
 const broker = createBroker({
   redis,                                  // required — your own ioredis client
   maxDepth: 5,                            // delegation depth ceiling
+  agentTtl: 3_600_000,                    // ms, how long an idle agent stays registered (must be >= maxReservationTtl)
   defaultReservationTtl: 30_000,          // ms, used when a call omits `ttl`
   maxReservationTtl: 300_000,             // ms, hard ceiling a caller's `ttl` cannot exceed
   concurrencyLimit: 10,                   // in-flight calls per (target, budgetKey) pair
@@ -162,7 +167,7 @@ await broker.requestPermission(
 );
 ```
 
-This polls the same atomic admission path with backoff until admitted, `queueTimeout` elapses (`reason: 'queue_timeout'`), or the denial reason is one that waiting can never fix (`unknown_agent` returns immediately, not after a timeout).
+This polls the same atomic admission path with backoff until admitted, `queueTimeout` elapses (`reason: 'queue_timeout'`), or the denial reason is one that waiting can never fix (`unknown_agent` returns immediately, not after a timeout). You can also pass an `AbortSignal` (`{ mode: "queue", signal }`) to cancel the wait externally; an aborted wait resolves with `reason: 'aborted'`.
 
 ---
 
@@ -184,6 +189,41 @@ If you need protection against a genuinely adversarial, non-cooperating caller, 
 
 ---
 
+## Engineering highlights
+
+For a reviewer short on time, these are the mechanisms worth looking at first — each one is a
+single atomic Redis operation, not a read-then-write pair a concurrent caller could interleave
+with:
+
+- **Single-round-trip admission control.** `requestPermission` checks agent existence, circuit
+  state, budget, and concurrency, and reserves against all of them, in one Lua script —
+  `src/admission/request-permission.ts`, [ADR-0023](docs/adr/0023-single-combined-admission-script.md).
+- **Idempotent reservation reconciliation shared by two call paths.** The same script resolves a
+  reservation whether it's an explicit `reportOutcome` call or a lazy sweep discovering an
+  abandoned one, closing the class of bug where two independently-written resolution paths
+  quietly drift apart — `src/admission/resolve-reservation.ts`,
+  [ADR-0002](docs/adr/0002-reportoutcome-refund-formula.md),
+  [ADR-0003](docs/adr/0003-budget-pool-deletion-handling.md).
+- **Single-probe circuit recovery**, a deliberate simplification from an originally-planned
+  multi-state design, with the trade-off reasoned through rather than assumed —
+  [ADR-0010](docs/adr/0010-single-probe-circuit-recovery.md).
+- **Broker-derived identity closing a TOCTOU spoofing window.** A child's depth, `rootId`, and
+  `budgetKey` are re-derived from the parent's stored state inside the same atomic script that
+  creates the child — never accepted as caller input — `src/agents/register-child.ts`,
+  [ADR-0012](docs/adr/0012-broker-derived-identity-and-depth.md).
+- **Real cross-process testing**, not simulated concurrency: the test harness forks genuine OS
+  processes and verifies state visibility and error propagation across them —
+  `test/helpers/harness.ts`, `test/integration/cross-process-harness.test.ts`.
+- **Honest non-atomicity where it's actually safe.** `register()` for a root agent uses
+  `MULTI`/`EXEC`, not Lua — a deliberate, narrower choice than the Lua-backed paths above. The
+  code comment states the exact failure window (a dropped connection before reply can leave an
+  orphan agent and/or orphan budget pool) and why it's harmless, rather than glossing over it —
+  `src/agents/register.ts`.
+
+See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) for the full request
+lifecycle, Redis data model, and failure model — including diagrams of each of the mechanisms
+above.
+
 ## Project status and roadmap
 
 This library solves cross-process budget, depth, and retry-storm coordination, and that core is tested under real multi-process concurrency (see [`docs/agent-broker-architecture.md#14-testing-architecture`](docs/agent-broker-architecture.md#14-testing-architecture)). It does **not** yet have agent-aware call metadata, framework-protocol adapters (MCP or similar), or a built-in observability surface beyond the four hooks above — these are intentional, not finished, and the plan for closing that gap honestly (including why it's a layer on top rather than a rewrite) is in [`docs/positioning.md`](docs/positioning.md). If you're evaluating this for an agent-framework integration today, read that document first.
@@ -193,7 +233,11 @@ This library solves cross-process budget, depth, and retry-storm coordination, a
 - [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) — full design rationale, invariants, Redis data model, failure model, and the ADR log
 - [`docs/positioning.md`](docs/positioning.md) — honest take on what this is, what it isn't yet, and the intended path to agent-framework integration
 - [`docs/adr/`](docs/adr/) — architecture decision records, including rejected alternatives
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — local setup, test commands, and PR expectations
+- [`RELEASE.md`](RELEASE.md) — versioning policy and the release procedure
+- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability
+- [`CHANGELOG.md`](CHANGELOG.md) — notable changes, oldest-unreleased-first
 
 ## License
 
-<!-- TODO: Seyi — pick a license (MIT recommended for maximum adoption) and fill this in before publishing. -->
+MIT © see [LICENSE](LICENSE)

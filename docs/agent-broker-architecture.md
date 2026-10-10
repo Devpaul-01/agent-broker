@@ -72,6 +72,41 @@ This was explicitly discussed and decided deliberately, not defaulted into:
 
 ## 4. System Boundaries
 
+### Diagram A — System architecture
+
+The broker is an **in-process library**, not a service: each application process links it
+directly and calls its methods like any other function. There is no broker process to deploy or
+scale independently — the only shared infrastructure is the Redis instance every process already
+points at.
+
+```mermaid
+flowchart LR
+    subgraph P1["Process A"]
+        A1["Your application code"] --> A2["agent-broker (in-process)"]
+    end
+    subgraph P2["Process B"]
+        B1["Your application code"] --> B2["agent-broker (in-process)"]
+    end
+    subgraph P3["Process N..."]
+        C1["Your application code"] --> C2["agent-broker (in-process)"]
+    end
+
+    A2 -- "Lua scripts: atomic check-and-reserve" --> R[("Redis\n(shared coordination state)")]
+    B2 -- "Lua scripts: atomic check-and-reserve" --> R
+    C2 -- "Lua scripts: atomic check-and-reserve" --> R
+
+    A1 -. "direct call, outside the broker's awareness" .-> T["Downstream target\n(LLM provider, rate-limited API, ...)"]
+    B1 -. "direct call, outside the broker's awareness" .-> T
+    C1 -. "direct call, outside the broker's awareness" .-> T
+```
+
+Two things this diagram is deliberately explicit about, because they're easy to misread from a
+glance: the broker never sits between the caller and the downstream target — the dashed lines are
+the caller's own direct calls, made entirely outside the broker. And every process's broker
+instance talks to the *same* Redis — that shared state, not the library code, is what makes
+coordination across processes possible at all (Section 18 covers what is and isn't shared this
+way in more depth).
+
 ### What "agent" means to the broker
 
 An agent is **not** a reasoning loop, a prompt, a model, or a task. To the broker, an agent is purely **a node in a delegation tree**, with:
@@ -104,6 +139,41 @@ A `target` is an **opaque string key**, supplied by the caller, representing "wh
 ## 5. Request Lifecycle (Current, Post-Pivot)
 
 **This supersedes an earlier version of this lifecycle** that assumed the broker executed downstream calls itself. That version is obsolete — see ADR-9.
+
+### Diagram B — Request lifecycle
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Broker as agent-broker
+    participant Redis
+    participant Target as Downstream target
+
+    Caller->>Broker: requestPermission({ agentId, target, estimatedCost, ttl })
+    Broker->>Redis: EVALSHA REQUEST_PERMISSION (1 atomic script)
+    Note over Redis: agent exists? circuit state?<br/>budget available? concurrency free?
+    alt all checks pass
+        Redis-->>Broker: reserve estimatedCost, create reservation,<br/>increment concurrency counter
+        Broker-->>Caller: { allowed: true, reservationId }
+        Caller->>Target: caller's own call (outside the broker entirely)
+        Target-->>Caller: response (or failure)
+        Caller->>Broker: reportOutcome({ reservationId, success, actualCost, retryable })
+        Broker->>Redis: EVALSHA RESOLVE_RESERVATION (1 atomic script)
+        Note over Redis: refund/adjust budget,<br/>release concurrency slot,<br/>update circuit breaker if retryable failure
+        Redis-->>Broker: resolved
+        Broker-->>Caller: { resolved: true, ... }
+    else any check fails
+        Redis-->>Broker: denial reason
+        Broker-->>Caller: { allowed: false, reason }
+        Note over Caller: no reservation created,<br/>no downstream call should be made
+    end
+```
+
+Everything inside the "all checks pass" branch's Redis step happens as a **single** `EVALSHA`
+round trip — the diagram's separate-looking boxes under that `Note` are one atomic operation, not
+sequential reads and writes a competing process could interleave with (Section 11 covers why that
+matters). The caller's actual downstream call is the one step the broker has no visibility into
+at all; everything it "knows" about that call's outcome comes second-hand from `reportOutcome`.
 
 ### Successful call
 
@@ -318,6 +388,44 @@ This is documented as a deliberate v1 choice with keyspace notifications as a va
 
 **General principle, derived from repeated analysis during design, not five separate ad-hoc fixes:** any operation that reads shared Redis state and then conditionally writes based on that read must be a single atomic unit (a Lua script via `EVAL`), never two separate round-trips. Between any two round trips, another process can interleave.
 
+### Diagram C — What's decided locally vs. what's coordinated via Redis
+
+```mermaid
+flowchart TD
+    subgraph Local["Decided locally, no coordination needed"]
+        L1["Input validation\n(malformed arguments)"]
+        L2["Queue-mode backoff/polling cadence"]
+        L3["Which denial reasons are\nworth retrying (NON_QUEUEABLE set)"]
+    end
+
+    subgraph Coordinated["Coordinated via Redis — true across all processes"]
+        direction TB
+        C1["Agent identity, depth, rootId, budgetKey\n(agent:{agentId} hash)"]
+        C2["Remaining budget per pool\n(budget:{budgetKey})"]
+        C3["In-flight concurrency per (target, budgetKey)\n(concurrency:{target}{budgetKey})"]
+        C4["Circuit-breaker failure window + state\n(circuit:{target}, circuit:{target}:state)"]
+        C5["Outstanding reservations\n(reservation:{id}, reservations:expiring)"]
+    end
+
+    Script1["REQUEST_PERMISSION\n(1 Lua script)"] --> C1
+    Script1 --> C2
+    Script1 --> C3
+    Script1 --> C4
+    Script2["RESOLVE_RESERVATION\n(1 Lua script, shared by\nreportOutcome and lazy cleanup)"] --> C2
+    Script2 --> C3
+    Script2 --> C4
+    Script2 --> C5
+    Script3["REGISTER_CHILD\n(1 Lua script)"] --> C1
+```
+
+Three Lua scripts are the entire coordination surface — everything a process can learn or change
+about shared state goes through exactly one of them, and each one is a single atomic Redis
+operation (no process can observe or act on a partial result of another process's script). What's
+*not* in this diagram is deliberate too: backoff timing, which denial reasons are worth waiting
+out, and argument validation are pure, local, in-process decisions that never touch Redis and
+never need to agree across processes — see `src/admission/queue.ts` for exactly how thin that
+local layer is on top of the coordinated core.
+
 ### Enumerated races
 
 1. **Budget reservation.** Two concurrent `requestPermission` calls under the same `budgetKey` could both read "enough budget available" before either has decremented, both proceed, and the pool over-admits. Must be check-and-decrement in one atomic step.
@@ -339,6 +447,25 @@ Since `requestPermission` must evaluate budget, concurrency, and circuit-breaker
 ---
 
 ## 12. Failure Model
+
+### Diagram D — Circuit-breaker state and recovery
+
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Closed: retryable failure, count stays < softThreshold
+    Closed --> Closed: non-retryable failure (never counted)
+    Closed --> Open: retryable failure count crosses hardThreshold
+    Open --> Open: most calls denied (circuit_open);\na probeRate fraction still admitted as probes
+    Open --> Closed: a single probe call succeeds\n(atomic: window cleared in the same script)
+    Open --> Open: a probe call fails\n(window keeps accumulating toward hardThreshold)
+```
+
+Two states, not three, as shipped — see [ADR-0010](adr/0010-single-probe-circuit-recovery.md) for
+why an originally-planned third `recovering` state (requiring several consecutive probe
+successes) was simplified away during implementation. Crossing `softThreshold` (below
+`hardThreshold`) doesn't change state at all; it only attaches a `retryAfter` backpressure hint to
+an otherwise-still-`allowed: true` response, visible in Section 9 above.
 
 ### Redis unavailable
 
@@ -380,13 +507,15 @@ Found during review rather than specified upfront — see [ADR-0003](adr/0003-bu
 
 ## 13. Public API (TypeScript)
 
-**Divergence from the original draft**, called out once here rather than annotated line-by-line below: `register()` for a child returns a denial shape (`{ allowed: false, reason }`) rather than throwing, mirroring `requestPermission`'s own already-documented choice to return rather than throw for expected outcomes (see "Errors vs. return values" below); the denial-reason strings are `'unknown_agent'`, `'budget_exceeded'`, `'concurrency_exceeded'`, `'circuit_open'`, `'redis_unavailable'`, `'queue_timeout'` (requestPermission) and `'depth_exceeded'` / `'unknown_agent'` (register) — not the slightly different spellings (`concurrency_limit`, `coordination_unavailable`) this document originally sketched; and `reportOutcome` never takes `costUnknown` as an input — see [ADR-0020](adr/0020-actualcost-and-costunknown.md) for why that turned out to be unnecessary as a separate field.
+**Divergence from the original draft**, called out once here rather than annotated line-by-line below: `register()` for a child returns a denial shape (`{ allowed: false, reason }`) rather than throwing, mirroring `requestPermission`'s own already-documented choice to return rather than throw for expected outcomes (see "Errors vs. return values" below); the denial-reason strings are `'unknown_agent'`, `'aborted'`, `'budget_exceeded'`, `'concurrency_exceeded'`, `'circuit_open'`, `'redis_unavailable'`, `'queue_timeout'` (requestPermission) and `'depth_exceeded'` / `'unknown_agent'` (register) — not the slightly different spellings (`concurrency_limit`, `coordination_unavailable`) this document originally sketched; and `reportOutcome` never takes `costUnknown` as an input — see [ADR-0020](adr/0020-actualcost-and-costunknown.md) for why that turned out to be unnecessary as a separate field.
 
 ```ts
 // Initialization — all fields set once, immutable for the broker instance's lifetime (ADR-0007)
 const broker = createBroker({
   redis: redisClient,                    // caller-supplied connection; library never manages its own (ADR-0006)
   maxDepth: 5,
+  agentTtl: 3_600_000,                   // ms, default; must be >= maxReservationTtl or an agent could
+                                          // expire mid-call (enforced at construction time)
   defaultReservationTtl: 30_000,         // ms
   maxReservationTtl: 300_000,            // ms — hard ceiling; caller-supplied ttl cannot exceed this
   concurrencyLimit: 10,                  // in-flight calls per (target, budgetKey) pair
@@ -425,10 +554,14 @@ const decision = await broker.requestPermission({
 }, {
   mode: 'deny',              // 'deny' | 'queue' — second-argument queue options, omit entirely for plain deny-mode
   queueTimeout: 10_000,      // only relevant if mode: 'queue'
+  signal: abortSignal,       // optional AbortSignal, only relevant if mode: 'queue' — cancels the wait
 });
 // decision: { allowed: true, reservationId, retryAfter?: number, degraded?: boolean }
-//        or { allowed: false, reason: 'budget_exceeded' | 'depth_exceeded' | 'unknown_agent'
-//              | 'circuit_open' | 'concurrency_exceeded' | 'redis_unavailable' | 'queue_timeout' }
+//        or { allowed: false, reason: 'unknown_agent' | 'aborted' | 'budget_exceeded'
+//              | 'concurrency_exceeded' | 'circuit_open' | 'redis_unavailable' | 'queue_timeout' }
+// NOTE: 'depth_exceeded' is a register() denial reason, not a requestPermission() one — the two
+// functions have distinct DenialReason types (see Section 13's opening note above). 'aborted' and
+// 'queue_timeout' only occur in queue mode.
 // degraded: true only when onRedisUnavailable: 'allow' admitted this call during an outage —
 // reservationId is null in that case (see reportOutcome's defined no-op for a null reservationId below)
 
