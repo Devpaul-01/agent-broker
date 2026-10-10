@@ -1,18 +1,33 @@
 {
   "name": "agent-broker",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "An in-process TypeScript library coordinating budget reservation, concurrency limiting, and circuit breaking across independent Node.js processes via Redis.",
   "type": "module",
+  "license": "MIT",
   "engines": { "node": ">=20" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-  "typecheck": "tsc --noEmit",
-  "build": "tsc -p tsconfig.build.json",
-  "test": "vitest run",
-  "test:unit": "vitest run test/unit",
-  "test:integration": "vitest run test/integration",
-  "redis:up": "docker compose up -d --wait",
-  "redis:down": "docker compose down"
-},
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "redis:up": "docker compose up -d --wait",
+    "redis:down": "docker compose down"
+  },
   "peerDependencies": {
     "ioredis": "^5.0.0"
   },
