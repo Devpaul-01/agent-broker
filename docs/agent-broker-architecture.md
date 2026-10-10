@@ -380,13 +380,15 @@ Found during review rather than specified upfront — see [ADR-0003](adr/0003-bu
 
 ## 13. Public API (TypeScript)
 
-**Divergence from the original draft**, called out once here rather than annotated line-by-line below: `register()` for a child returns a denial shape (`{ allowed: false, reason }`) rather than throwing, mirroring `requestPermission`'s own already-documented choice to return rather than throw for expected outcomes (see "Errors vs. return values" below); the denial-reason strings are `'unknown_agent'`, `'budget_exceeded'`, `'concurrency_exceeded'`, `'circuit_open'`, `'redis_unavailable'`, `'queue_timeout'` (requestPermission) and `'depth_exceeded'` / `'unknown_agent'` (register) — not the slightly different spellings (`concurrency_limit`, `coordination_unavailable`) this document originally sketched; and `reportOutcome` never takes `costUnknown` as an input — see [ADR-0020](adr/0020-actualcost-and-costunknown.md) for why that turned out to be unnecessary as a separate field.
+**Divergence from the original draft**, called out once here rather than annotated line-by-line below: `register()` for a child returns a denial shape (`{ allowed: false, reason }`) rather than throwing, mirroring `requestPermission`'s own already-documented choice to return rather than throw for expected outcomes (see "Errors vs. return values" below); the denial-reason strings are `'unknown_agent'`, `'aborted'`, `'budget_exceeded'`, `'concurrency_exceeded'`, `'circuit_open'`, `'redis_unavailable'`, `'queue_timeout'` (requestPermission) and `'depth_exceeded'` / `'unknown_agent'` (register) — not the slightly different spellings (`concurrency_limit`, `coordination_unavailable`) this document originally sketched; and `reportOutcome` never takes `costUnknown` as an input — see [ADR-0020](adr/0020-actualcost-and-costunknown.md) for why that turned out to be unnecessary as a separate field.
 
 ```ts
 // Initialization — all fields set once, immutable for the broker instance's lifetime (ADR-0007)
 const broker = createBroker({
   redis: redisClient,                    // caller-supplied connection; library never manages its own (ADR-0006)
   maxDepth: 5,
+  agentTtl: 3_600_000,                   // ms, default; must be >= maxReservationTtl or an agent could
+                                          // expire mid-call (enforced at construction time)
   defaultReservationTtl: 30_000,         // ms
   maxReservationTtl: 300_000,            // ms — hard ceiling; caller-supplied ttl cannot exceed this
   concurrencyLimit: 10,                  // in-flight calls per (target, budgetKey) pair
@@ -425,10 +427,14 @@ const decision = await broker.requestPermission({
 }, {
   mode: 'deny',              // 'deny' | 'queue' — second-argument queue options, omit entirely for plain deny-mode
   queueTimeout: 10_000,      // only relevant if mode: 'queue'
+  signal: abortSignal,       // optional AbortSignal, only relevant if mode: 'queue' — cancels the wait
 });
 // decision: { allowed: true, reservationId, retryAfter?: number, degraded?: boolean }
-//        or { allowed: false, reason: 'budget_exceeded' | 'depth_exceeded' | 'unknown_agent'
-//              | 'circuit_open' | 'concurrency_exceeded' | 'redis_unavailable' | 'queue_timeout' }
+//        or { allowed: false, reason: 'unknown_agent' | 'aborted' | 'budget_exceeded'
+//              | 'concurrency_exceeded' | 'circuit_open' | 'redis_unavailable' | 'queue_timeout' }
+// NOTE: 'depth_exceeded' is a register() denial reason, not a requestPermission() one — the two
+// functions have distinct DenialReason types (see Section 13's opening note above). 'aborted' and
+// 'queue_timeout' only occur in queue mode.
 // degraded: true only when onRedisUnavailable: 'allow' admitted this call during an outage —
 // reservationId is null in that case (see reportOutcome's defined no-op for a null reservationId below)
 
