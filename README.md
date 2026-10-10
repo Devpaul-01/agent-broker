@@ -198,6 +198,10 @@ This library solves cross-process budget, depth, and retry-storm coordination, a
 - [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) — full design rationale, invariants, Redis data model, failure model, and the ADR log
 - [`docs/positioning.md`](docs/positioning.md) — honest take on what this is, what it isn't yet, and the intended path to agent-framework integration
 - [`docs/adr/`](docs/adr/) — architecture decision records, including rejected alternatives
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — local setup, test commands, and PR expectations
+- [`RELEASE.md`](RELEASE.md) — versioning policy and the release procedure
+- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability
+- [`CHANGELOG.md`](CHANGELOG.md) — notable changes, oldest-unreleased-first
 
 ## License
 
