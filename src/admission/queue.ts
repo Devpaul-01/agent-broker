@@ -4,11 +4,12 @@ import type { Admitted, Denied, DenialReason, RequestPermissionInput } from "./r
 
 export interface QueueOptions {
   mode: "queue";
-  /** Required: an unbounded wait has no safe default here, since two of the three queueable
-   * denial reasons (budget_exceeded, circuit_open) have no guarantee of ever resolving — a
-   * permanently exhausted budget or a circuit that never gets a successful probe would poll
-   * forever without this. */
   queueTimeout: number;
+  /** Optional: lets the caller cancel a queued wait explicitly (e.g. the surrounding operation
+   * was cancelled, the user navigated away) rather than being stuck until queueTimeout fires
+   * regardless. Checked at the top of every poll iteration and also races the current sleep,
+   * so an abort during a wait interrupts promptly rather than waiting out the full backoff. */
+  signal?: AbortSignal;
 }
 
 /** Reasons that genuinely cannot be fixed by waiting — queuing on these would poll pointlessly
@@ -25,20 +26,34 @@ function nextBackoff(previousMs: number): number {
   return Math.max(10, Math.round(capped + jitter));
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function validateQueueOptions(options: unknown): asserts options is QueueOptions {
   if (options === null || typeof options !== "object") {
     throw new BrokerArgumentError("queue options must be an object");
   }
-  const { mode, queueTimeout } = options as Record<string, unknown>;
+  const { mode, queueTimeout, signal } = options as Record<string, unknown>;
   if (mode !== "queue") {
     throw new BrokerArgumentError(`mode must be 'queue', got ${String(mode)}`);
   }
   if (!Number.isSafeInteger(queueTimeout) || (queueTimeout as number) <= 0) {
     throw new BrokerArgumentError(`queueTimeout must be a positive integer (ms), got ${String(queueTimeout)}`);
+  }
+  if (signal !== undefined && !(signal instanceof AbortSignal)) {
+    throw new BrokerArgumentError("signal must be an AbortSignal, if provided");
   }
 }
 
@@ -62,13 +77,21 @@ export async function requestPermissionQueued(
 ): Promise<Admitted | Denied> {
   validateQueueOptions(queueOptions);
 
+  if (queueOptions.signal?.aborted) {
+    return { allowed: false, reason: "aborted" };
+  }
+
   const deadline = Date.now() + queueOptions.queueTimeout;
   let backoff = INITIAL_BACKOFF_MS;
 
   for (;;) {
     const result = await attempt(config, input);
     if (result.allowed) return result;
-    if (NON_QUEUEABLE.has(result.reason)) return result; // unknown_agent: no point waiting
+    if (NON_QUEUEABLE.has(result.reason)) return result;
+
+    if (queueOptions.signal?.aborted) {
+      return { allowed: false, reason: "aborted" };
+    }
 
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
@@ -76,6 +99,13 @@ export async function requestPermissionQueued(
     }
 
     backoff = nextBackoff(backoff);
-    await sleep(Math.min(backoff, remaining));
+    try {
+      await sleep(Math.min(backoff, remaining), queueOptions.signal);
+    } catch {
+      // sleep rejects only on abort (see sleep()'s implementation) — this is reached exactly
+      // when the signal fires mid-wait, interrupting promptly rather than waiting out the
+      // full backoff before the next poll's abort check would have caught it.
+      return { allowed: false, reason: "aborted" };
+    }
   }
 }

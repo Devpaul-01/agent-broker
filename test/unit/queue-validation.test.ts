@@ -14,6 +14,15 @@ describe("validateQueueOptions", () => {
     expect(() => validateQueueOptions(input)).toThrow(BrokerArgumentError);
   });
 
+  it("accepts a valid AbortSignal", () => {
+  const controller = new AbortController();
+  expect(() => validateQueueOptions({ mode: "queue", queueTimeout: 1000, signal: controller.signal })).not.toThrow();
+});
+
+it("rejects a non-AbortSignal value for signal", () => {
+  expect(() => validateQueueOptions({ mode: "queue", queueTimeout: 1000, signal: "not-a-signal" })).toThrow(BrokerArgumentError);
+});
+
   it("accepts a valid queue options object", () => {
     expect(() => validateQueueOptions({ mode: "queue", queueTimeout: 5000 })).not.toThrow();
   });

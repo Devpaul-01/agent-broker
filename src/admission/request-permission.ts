@@ -23,7 +23,7 @@ export interface Admitted {
    * of a null reservationId, which is a defined, safe no-op specifically for this case. */
   degraded?: boolean;
 }
-export type DenialReason = "unknown_agent" | "budget_exceeded" | "concurrency_exceeded" | "circuit_open" | "redis_unavailable" | "queue_timeout";
+export type DenialReason = "unknown_agent" | "aborted" | "budget_exceeded" | "concurrency_exceeded" | "circuit_open" | "redis_unavailable" | "queue_timeout";
 export interface Denied {
   allowed: false;
   reason: DenialReason;
