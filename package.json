@@ -4,7 +4,25 @@
   "description": "An in-process TypeScript library coordinating budget reservation, concurrency limiting, and circuit breaking across independent Node.js processes via Redis.",
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=20" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Devpaul-01/agent-broker.git"
+  },
+  "homepage": "https://github.com/Devpaul-01/agent-broker#readme",
+  "bugs": {
+    "url": "https://github.com/Devpaul-01/agent-broker/issues"
+  },
+  "keywords": [
+    "redis",
+    "concurrency",
+    "rate-limiting",
+    "circuit-breaker",
+    "agents",
+    "llm",
+    "coordination",
+    "distributed-systems"
+  ],
+  "engines": { "node": ">=22" },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

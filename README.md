@@ -38,6 +38,8 @@ It is also not a security boundary against a malicious caller. It protects again
 npm install agent-broker ioredis
 ```
 
+Requires Node.js 22 or later, and a reachable Redis instance (local, containerized, or managed).
+
 `ioredis` is a peer dependency — you bring your own Redis connection; the library never manages one itself (see [ADR-0006](docs/adr/0006-no-owned-redis-connection.md)).
 
 ## Quick start
@@ -60,8 +62,10 @@ const decision = await broker.requestPermission({
 });
 
 if (!decision.allowed) {
-  // decision.reason: 'budget_exceeded' | 'depth_exceeded' | 'circuit_open'
-  //                | 'concurrency_exceeded' | 'unknown_agent' | 'redis_unavailable'
+  // decision.reason: 'unknown_agent' | 'aborted' | 'budget_exceeded'
+  //                | 'concurrency_exceeded' | 'circuit_open' | 'redis_unavailable' | 'queue_timeout'
+  // ('aborted' and 'queue_timeout' only apply in queue mode — see "Queue mode" below.
+  //  'depth_exceeded' is a register() reason, not a requestPermission() reason — see below.)
   throw new Error(`denied: ${decision.reason}`);
 }
 
@@ -121,6 +125,7 @@ Full mechanics, invariants, and the reasoning behind each of these are in [`docs
 const broker = createBroker({
   redis,                                  // required — your own ioredis client
   maxDepth: 5,                            // delegation depth ceiling
+  agentTtl: 3_600_000,                    // ms, how long an idle agent stays registered (must be >= maxReservationTtl)
   defaultReservationTtl: 30_000,          // ms, used when a call omits `ttl`
   maxReservationTtl: 300_000,             // ms, hard ceiling a caller's `ttl` cannot exceed
   concurrencyLimit: 10,                   // in-flight calls per (target, budgetKey) pair
@@ -162,7 +167,7 @@ await broker.requestPermission(
 );
 ```
 
-This polls the same atomic admission path with backoff until admitted, `queueTimeout` elapses (`reason: 'queue_timeout'`), or the denial reason is one that waiting can never fix (`unknown_agent` returns immediately, not after a timeout).
+This polls the same atomic admission path with backoff until admitted, `queueTimeout` elapses (`reason: 'queue_timeout'`), or the denial reason is one that waiting can never fix (`unknown_agent` returns immediately, not after a timeout). You can also pass an `AbortSignal` (`{ mode: "queue", signal }`) to cancel the wait externally; an aborted wait resolves with `reason: 'aborted'`.
 
 ---
 
@@ -196,4 +201,4 @@ This library solves cross-process budget, depth, and retry-storm coordination, a
 
 ## License
 
-<!-- TODO: Seyi — pick a license (MIT recommended for maximum adoption) and fill this in before publishing. -->
+MIT © see [LICENSE](LICENSE)
