@@ -26,7 +26,7 @@ Each of these looks fine from inside any single process and only becomes a probl
 
 ## What this is not
 
-To save you a wrong assumption: this is **not** an LLM gateway in the sense of Portkey, LiteLLM, or Cloudflare AI Gateway. Those sit *in* the request path — they route, cache, and proxy the actual call to the provider. `agent-broker` never touches the provider at all. It solves a narrower, different problem: cross-process safety coordination, not request routing. See [`docs/architecture.md`](docs/architecture.md) for the full boundary discussion, and [`docs/positioning.md`](docs/positioning.md) for how this fits (and doesn't yet fit) into agent-framework workflows.
+To save you a wrong assumption: this is **not** an LLM gateway in the sense of Portkey, LiteLLM, or Cloudflare AI Gateway. Those sit *in* the request path — they route, cache, and proxy the actual call to the provider. `agent-broker` never touches the provider at all. It solves a narrower, different problem: cross-process safety coordination, not request routing. See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) for the full boundary discussion, and [`docs/positioning.md`](docs/positioning.md) for how this fits (and doesn't yet fit) into agent-framework workflows.
 
 It is also not a security boundary against a malicious caller. It protects against *accidental* and *architectural* bypass — not against a process owner willing to lie to it. See [Trust model](#trust-model) below.
 
@@ -111,7 +111,7 @@ await broker.reportOutcome({
 | **Reservation** | A hold placed on `estimatedCost` at admission time, reconciled against `actualCost` once you report back. |
 | **Circuit breaker** | Shared, cross-process failure tracking per `target`. Trips to `open` once recent `retryable: true` failures cross a threshold; recovers via a small trickle of probe calls. |
 
-Full mechanics, invariants, and the reasoning behind each of these are in [`docs/architecture.md`](docs/architecture.md).
+Full mechanics, invariants, and the reasoning behind each of these are in [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md).
 
 ---
 
@@ -149,7 +149,7 @@ If Redis is unreachable, `onRedisUnavailable` decides what happens, and it defau
 - **`'deny'`** (default): calls are denied with `reason: 'redis_unavailable'`. The one moment coordination can't function is exactly the moment you don't want to silently lose the guarantees it provides.
 - **`'allow'`**: calls are admitted without a reservation (`degraded: true`, `reservationId: null`). Pick this only if raw availability matters more than the coordination guarantees during an outage — this library will not make that tradeoff silently on your behalf.
 
-See [`docs/architecture.md`](docs/architecture.md#failure-model) for the full breakdown of crash and timeout behavior.
+See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md#12-failure-model) for the full breakdown of crash and timeout behavior.
 
 ## Queue mode
 
@@ -180,17 +180,17 @@ This is an in-process library. The process that imports it fundamentally control
 - A caller that misreports `retryable`, `actualCost`, or `success` on `reportOutcome` — the broker never observes your actual downstream call or response, so it has no independent way to verify what you tell it.
 - A caller that never calls `reportOutcome` at all — bounded by reservation TTL, not eliminated.
 
-If you need protection against a genuinely adversarial, non-cooperating caller, you need a boundary this library doesn't provide (e.g., a service-mode deployment with its own auth). See [`docs/architecture.md`](docs/architecture.md#security-and-trust-boundaries).
+If you need protection against a genuinely adversarial, non-cooperating caller, you need a boundary this library doesn't provide (e.g., a service-mode deployment with its own auth). See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md#17-security-and-trust-boundaries).
 
 ---
 
 ## Project status and roadmap
 
-This library solves cross-process budget, depth, and retry-storm coordination, and that core is tested under real multi-process concurrency (see [`docs/architecture.md#testing`](docs/architecture.md#testing)). It does **not** yet have agent-aware call metadata, framework-protocol adapters (MCP or similar), or a built-in observability surface beyond the four hooks above — these are intentional, not finished, and the plan for closing that gap honestly (including why it's a layer on top rather than a rewrite) is in [`docs/positioning.md`](docs/positioning.md). If you're evaluating this for an agent-framework integration today, read that document first.
+This library solves cross-process budget, depth, and retry-storm coordination, and that core is tested under real multi-process concurrency (see [`docs/agent-broker-architecture.md#14-testing-architecture`](docs/agent-broker-architecture.md#14-testing-architecture)). It does **not** yet have agent-aware call metadata, framework-protocol adapters (MCP or similar), or a built-in observability surface beyond the four hooks above — these are intentional, not finished, and the plan for closing that gap honestly (including why it's a layer on top rather than a rewrite) is in [`docs/positioning.md`](docs/positioning.md). If you're evaluating this for an agent-framework integration today, read that document first.
 
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md) — full design rationale, invariants, Redis data model, failure model
+- [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) — full design rationale, invariants, Redis data model, failure model, and the ADR log
 - [`docs/positioning.md`](docs/positioning.md) — honest take on what this is, what it isn't yet, and the intended path to agent-framework integration
 - [`docs/adr/`](docs/adr/) — architecture decision records, including rejected alternatives
 
