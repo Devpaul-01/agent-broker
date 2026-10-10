@@ -1,10 +1,12 @@
-# agent-broker — Architecture & Design Handoff Document
+# agent-broker — Architecture & Design Document
 
 ## Purpose of this document
 
-This document is a complete handoff for an implementation session (human or AI coding agent) that has **no prior context** about this project. It captures not just the final design, but the reasoning that produced it — including rejected alternatives — because several of these decisions are non-obvious and an implementer who doesn't understand *why* a choice was made is at risk of "fixing" it incorrectly.
+This document was originally written as a complete handoff for an implementation session (human or AI coding agent) with **no prior context** about this project — it captured not just the intended design, but the reasoning that produced it, including rejected alternatives, because several of these decisions are non-obvious and an implementer who doesn't understand *why* a choice was made is at risk of "fixing" it incorrectly.
 
-Read this document in full before writing any code. Section 22 (Known Limitations) and the ADR log are especially important — they document tradeoffs that are intentional, not oversights.
+The library has since been built and tested, and this document has been **updated to reflect the system as it actually ships**, not just as it was originally planned. Everywhere the implementation diverged from the original design — a simplified circuit-breaker recovery model, a corrected refund-signaling mechanism, a key-naming scheme hardened against collision, and a few others — that divergence is called out explicitly in place, with a link to the ADR that records why. A short-lived, separate `architecture.md` summary document existed briefly alongside this one; its content has been fully folded back in here, and it has been removed so there is exactly one architecture document, not two that can drift apart again.
+
+Read this document in full before making non-trivial changes. Section 20 (Known Limitations) and the ADR log (Section 21) are especially important — they document tradeoffs that are intentional, not oversights.
 
 ---
 
@@ -234,7 +236,7 @@ reserve(estimatedCost) → call happens (outside the broker) → reportOutcome(a
 
 ### Unknown cost handling
 
-`reportOutcome({ success: true, actualCost: null, costUnknown: true })` is an explicit, first-class case — used when the downstream call succeeded but the caller genuinely cannot determine real usage (e.g., the provider returned no usage metadata). The broker's fallback: release the *originally reserved estimated* cost back as the settled cost (best available information), rather than silently defaulting to an arbitrary number like `1`, which was explicitly considered and rejected as dangerous — a plausible-looking wrong default would silently corrupt budget accounting in a way that's invisible until numbers stop adding up much later.
+A successful call where the caller genuinely cannot determine real usage (e.g., the provider returned no usage metadata) is handled by simply omitting `actualCost` from `reportOutcome({ success: true })` — there is no separate `costUnknown` input field. The broker's fallback: release the *originally reserved estimated* cost back as the settled cost (best available information), and report `costUnknown: true` in its response, rather than silently defaulting to an arbitrary number like `1`, which was explicitly considered and rejected as dangerous — a plausible-looking wrong default would silently corrupt budget accounting in a way that's invisible until numbers stop adding up much later. See [ADR-0020](adr/0020-actualcost-and-costunknown.md) for why the implementation infers this from the absence of `actualCost` rather than a separate explicit flag, which was the original design here.
 
 ### `budgetKey` scope, restated for this section
 
@@ -270,14 +272,16 @@ The broker never sees a downstream response. It only sees `requestPermission` ca
 
 **Trust caveat, stated explicitly:** the broker has no independent way to verify a caller's `retryable` claim — it never sees the actual downstream error. A caller could misreport this, by bug or bad faith. This is an accepted, named limitation (see Section 18), not a gap that was overlooked.
 
-### Circuit breaker: three states, two thresholds
+### Circuit breaker: two states as shipped, two thresholds
 
 This is a deliberately standard, well-understood pattern (not a novel invention) — the genuinely novel part of this design is that it is **coordinated across independent processes via Redis**, unlike most circuit breaker implementations which are per-process/in-memory.
 
 - **Closed** (normal): calls proceed normally.
 - **Soft threshold crossed** (e.g. 5 failures in the window, configurable): still `allowed: true`, but the response includes a `retryAfter` hint, scaling with how far past threshold the count is. This is coordinated backpressure — every caller against this target is told to slow down proportional to actual aggregate distress, not each caller's own independent guess.
-- **Hard threshold crossed** (e.g. 20 failures in the window, configurable): circuit transitions to **open**. `requestPermission` returns `{ allowed: false, reason: 'circuit_open' }` for most calls.
-- **Recovery (the "half-open" problem):** if the circuit denies everyone, no successes can ever be reported, so the system would have no way to learn the target has recovered. Solution: while `open`, a small configurable fraction of calls (`probeRate`, e.g. ~10%) are still admitted through as **probes**. Probe successes count toward a separate recent-success signal; enough consecutive/recent probe successes moves the circuit to **recovering**, and eventually back to **closed**.
+- **Hard threshold crossed** (e.g. 20 failures in the window, configurable): circuit transitions to **open**. `requestPermission` returns `{ allowed: false, reason: 'circuit_open' }` for most calls. The circuit now opens the instant the threshold-crossing failure is reported via `reportOutcome`, not lazily on some later `requestPermission` call that happens to re-observe the count — see [ADR-0009](adr/0009-fire-and-forget-hooks.md)'s sibling decision recorded in the resolve-reservation script.
+- **Recovery (the "half-open" problem):** if the circuit denies everyone, no successes can ever be reported, so the system would have no way to learn the target has recovered. Solution: while `open`, a small configurable fraction of calls (`probeRate`, e.g. ~10%) are still admitted through as **probes**.
+
+**Divergence from the original design, recorded in [ADR-0010](adr/0010-single-probe-circuit-recovery.md):** this document originally specified a third `recovering` state, reached only after several consecutive probe successes. **As shipped, there are only two states — `closed` and `open`.** A single successful probe closes the circuit immediately and clears the entire failure window, in the same atomic script that resolves the reservation. This was a deliberate simplification made during implementation, not an oversight: with `probeRate` typically small, requiring several *consecutive* successes from an already-thin trickle of probes measurably lengthens how long a genuinely recovered target stays needlessly gated, for a benefit (avoiding one bad reopen) that is probabilistic and modest — and a false-positive single-probe recovery is cheap to correct, since the very next failure starts rebuilding the window from a clean slate toward the same `hardThreshold` as any other failure streak. See ADR-0010 for the full reasoning and the rejected multi-probe alternative.
 
 ### A race that must not be overlooked
 
@@ -287,14 +291,17 @@ The "1-in-N probe" decision must be part of the same atomic operation as everyth
 
 ## 10. Redis Data Model
 
+**Divergence from the original design:** the key patterns below are updated to what actually shipped. The original draft joined `target` and `budgetKey` with a plain `:` separator (`concurrency:{target}:{budgetKey}`) — this was found, during implementation, to be ambiguous whenever `target` itself contains a colon (which it routinely does, per the documented `provider:model` convention): `target="a:b", budgetKey="c"` and `target="a", budgetKey="b:c"` both naively serialize to the identical string. Every multi-segment key below instead length-prefixes each caller-supplied segment (`seg(value) = "${value.length}:${value}"`) before concatenation, which makes the segment boundary unambiguous regardless of what characters the segment contains. See [ADR-0008](adr/0008-length-prefixed-key-segments.md) for the full reasoning and the rejected alternatives (escaping, a reserved separator character). The three-state `circuit:{target}` hash (`state`/`openedAt`/`recentProbeSuccesses`) described in the original draft is likewise retired along with the `recovering` state itself — see [ADR-0010](adr/0010-single-probe-circuit-recovery.md).
+
 | Key pattern | Type | Purpose | Notes |
 |---|---|---|---|
-| `agent:{agentId}` | Hash | `parentId`, `depth`, `rootId`, `budgetKey`, `createdAt`, `lastHeartbeat` | TTL on the whole key, refreshed on every heartbeat/call |
-| `budget:{budgetKey}` | String (integer) | Remaining lifetime budget for this pool | Atomic `INCRBY`/`DECRBY`; deliberately a plain counter, not a compound structure |
-| `reservation:{reservationId}` | Hash | `agentId`, `budgetKey`, `target`, `estimatedCost`, `mode`, `createdAt` | TTL = caller-supplied value from `requestPermission`, bounded by broker's `maxReservationTtl` |
-| `concurrency:{target}:{budgetKey}` | String (integer) | In-flight call count for this target+key pair | Atomic increment/decrement, folded into the combined admission script |
-| `retries:{target}` | Sorted Set | Sliding-window failure timestamps for circuit-breaker detection | Member = reservationId (or similar unique token), score = timestamp |
-| `circuit:{target}` | Hash | `state` (closed/open/recovering), `openedAt`, `recentProbeSuccesses` | Read/written atomically alongside the retry sorted set |
+| `agent:{agentId}` | Hash, TTL | `parentId`, `depth`, `rootId`, `budgetKey`, `createdAt`, `lastHeartbeat` | TTL on the whole key, refreshed on every heartbeat/call. `agentId` is broker-issued (a UUID), not caller-supplied, so it is used raw with no `seg()` prefixing. |
+| `budget:{seg(budgetKey)}` | String (integer), no TTL | Remaining lifetime budget for this pool | Atomic `INCRBY`/`DECRBY`; deliberately a plain counter, not a compound structure |
+| `reservation:{reservationId}` | Hash, TTL = callerTtl + grace | `agentId`, `budgetKey`, `target`, `estimatedCost`, `createdAt`, `isProbe` | TTL = caller-supplied value from `requestPermission` (bounded by `maxReservationTtl`) plus a short grace period, so the hash survives long enough past logical expiry for late reconciliation or lazy cleanup to still read its fields |
+| `reservations:expiring` | Sorted set, no TTL | One set total; member = `reservationId`, score = logical expiry timestamp | Drives lazy cleanup — see below. Not present in the original draft, which described per-key TTL expiry alone as the cleanup trigger; a single sorted set is what the shipped lazy-sweep mechanism actually scans. |
+| `concurrency:{seg(target)}{seg(budgetKey)}` | String (integer) | In-flight call count for this `(target, budgetKey)` pair | Atomic increment/decrement, folded into the combined admission script |
+| `circuit:{seg(target)}` | Sorted set | Sliding-window retryable-failure timestamps for circuit-breaker detection | Member = `reservationId`, score = timestamp. Named `retries:{target}` in the original draft; renamed during implementation to pair naturally with `circuit:{seg(target)}:state` below. |
+| `circuit:{seg(target)}:state` | String | `"open"`, or absent (treated as `closed`) | Two states, not three — see the Retry Coordination section above and [ADR-0010](adr/0010-single-probe-circuit-recovery.md) |
 
 ### Reservation cleanup: lazy, not event-driven (deliberate v1 simplification)
 
@@ -321,7 +328,13 @@ This is documented as a deliberate v1 choice with keyspace notifications as a va
 
 ### Decision: one combined admission script, not several smaller ones
 
-Since `requestPermission` must evaluate budget, concurrency, and circuit-breaker state together as one admission decision, splitting this into multiple smaller Lua scripts was explicitly considered and rejected — doing so would recreate, at the code-organization level, exactly the race the design exists to eliminate at the Redis level. **`requestPermission` is backed by exactly one Lua script** performing all checks and all corresponding writes atomically.
+Since `requestPermission` must evaluate budget, concurrency, and circuit-breaker state together as one admission decision, splitting this into multiple smaller Lua scripts was explicitly considered and rejected — doing so would recreate, at the code-organization level, exactly the race the design exists to eliminate at the Redis level. **`requestPermission` is backed by exactly one Lua script** performing all checks and all corresponding writes atomically. See [ADR-0023](adr/0023-single-combined-admission-script.md).
+
+### The three scripts as shipped
+
+- **`REQUEST_PERMISSION`** — agent existence, circuit state (including atomic probe-slot allocation), budget check-and-reserve, concurrency check-and-increment, all in one script.
+- **`REGISTER_CHILD`** — parent existence/depth lookup and child creation in one script, closing race #4 below.
+- **`RESOLVE_RESERVATION`** — the single resolution path shared by both `reportOutcome` and the lazy-cleanup sweep described below, not two independently-written scripts. This wasn't in the original draft's script inventory: during implementation, resolving a reservation (refunding/adjusting budget, releasing the concurrency slot, marking it resolved, and — for a genuine `reportOutcome` call — feeding the circuit breaker) turned out to be exactly the same operation whether triggered by an explicit caller report or by a later lazy sweep discovering an abandoned reservation. Extracting it once means there is exactly one idempotency check (`resolved` flag) to get right, not two that must independently agree with each other.
 
 ---
 
@@ -349,17 +362,34 @@ Also the caller's problem. If a caller cannot determine actual cost due to malfo
 
 **This ambiguity is not solved, and cannot be solved in general** — this is a fundamental, well-known problem in distributed systems (the same class of problem that motivates idempotency keys in systems like the developer's own prior financial-ledger work). The honest framing: the system does not eliminate this ambiguity; it **bounds its consequence**. Reservation TTLs ensure that whatever happened, the worst case is a reservation sitting unresolved until TTL expiry, then safely released. This should be documented plainly as an acknowledged, bounded-impact limitation — not something the implementer should attempt to "solve" with cleverness, as no such solution exists in the general case.
 
+### Budget pool deleted externally
+
+Found during review rather than specified upfront — see [ADR-0003](adr/0003-budget-pool-deletion-handling.md). If a `budget:{...}` key is deleted out from under an active reservation (by something outside the library — it has no TTL and nothing in the library ever deletes it itself), the refund on reconciliation is simply skipped rather than silently recreating the pool. The reservation still resolves fully (concurrency is released, it will not be reported on again), and the response includes `poolMissing: true` so the caller can detect the situation rather than have it pass silently.
+
+### Summary table
+
+| Scenario | Behavior |
+|---|---|
+| Redis unreachable | Governed by `onRedisUnavailable` (`'deny'` default, `'allow'` opt-in). Never silently treated as success. |
+| Caller crashes after admission, before reporting | Indistinguishable from "crashed mid-call" — handled identically via reservation TTL expiry, release is automatic. |
+| Budget pool deleted externally | Refund is skipped (no silent recreation), reservation still resolves fully, response includes `poolMissing: true`. See [ADR-0003](adr/0003-budget-pool-deletion-handling.md). |
+| Network timeout ambiguity | Not solved — a fundamental, general distributed-systems limitation. Bounded via reservation TTL, not eliminated. |
+| Reservation never resolved at all | Lazily swept on a later, unrelated `requestPermission` call once logically expired (see [ADR-0001](adr/0001-reservation-ttl-and-lazy-cleanup.md)); resolved as a full refund, and explicitly excluded from circuit-breaker accounting, since an abandoned reservation is evidence about the *caller* crashing, not the *target* failing. |
+
 ---
 
 ## 13. Public API (TypeScript)
 
+**Divergence from the original draft**, called out once here rather than annotated line-by-line below: `register()` for a child returns a denial shape (`{ allowed: false, reason }`) rather than throwing, mirroring `requestPermission`'s own already-documented choice to return rather than throw for expected outcomes (see "Errors vs. return values" below); the denial-reason strings are `'unknown_agent'`, `'budget_exceeded'`, `'concurrency_exceeded'`, `'circuit_open'`, `'redis_unavailable'`, `'queue_timeout'` (requestPermission) and `'depth_exceeded'` / `'unknown_agent'` (register) — not the slightly different spellings (`concurrency_limit`, `coordination_unavailable`) this document originally sketched; and `reportOutcome` never takes `costUnknown` as an input — see [ADR-0020](adr/0020-actualcost-and-costunknown.md) for why that turned out to be unnecessary as a separate field.
+
 ```ts
-// Initialization — all fields set once, immutable for the broker instance's lifetime (ADR-19)
+// Initialization — all fields set once, immutable for the broker instance's lifetime (ADR-0007)
 const broker = createBroker({
-  redis: redisClient,                    // caller-supplied connection; library never manages its own
+  redis: redisClient,                    // caller-supplied connection; library never manages its own (ADR-0006)
   maxDepth: 5,
   defaultReservationTtl: 30_000,         // ms
   maxReservationTtl: 300_000,            // ms — hard ceiling; caller-supplied ttl cannot exceed this
+  concurrencyLimit: 10,                  // in-flight calls per (target, budgetKey) pair
   onRedisUnavailable: 'deny',            // 'deny' | 'allow', default 'deny'
   circuitBreaker: {
     softThreshold: 5,
@@ -367,17 +397,24 @@ const broker = createBroker({
     windowMs: 60_000,
     probeRate: 0.1,
   },
+  hooks: {
+    onDecision(event) {},                // fires on every requestPermission outcome
+    onOutcome(event) {},                 // fires on every reportOutcome call
+    onCircuitStateChange(event) {},      // fires only on open/closed transitions
+    onCleanup(event) {},                 // fires when a lazy sweep resolves an abandoned reservation — see Section 15
+  },
 });
 
 // Registration
 const root = await broker.register({
-  budgetKey: 'user-123',        // optional; defaults to own broker-issued agentId if omitted
+  budgetKey: 'user-123',        // optional; defaults to own broker-issued agentId if omitted (ADR-0015)
   initialBudget: 5000,          // only meaningful on first creation of this budgetKey's pool
 });
 // returns: { agentId, depth: 0, rootId: agentId, budgetKey }
 
 const child = await broker.register({ parentId: root.agentId });
-// budgetKey, depth, rootId are NEVER passed by the caller — always derived from parent
+// budgetKey, depth, rootId are NEVER passed by the caller — always derived from parent (ADR-0012)
+// returns: ChildAgent, or { allowed: false, reason: 'depth_exceeded' | 'unknown_agent' }
 
 // Core admission check
 const decision = await broker.requestPermission({
@@ -385,24 +422,28 @@ const decision = await broker.requestPermission({
   target: 'groq:llama-3.3-70b-versatile',
   estimatedCost: 800,
   ttl: 15_000,
-  mode: 'deny',              // 'deny' | 'queue'
+}, {
+  mode: 'deny',              // 'deny' | 'queue' — second-argument queue options, omit entirely for plain deny-mode
   queueTimeout: 10_000,      // only relevant if mode: 'queue'
 });
-// decision: { allowed: true, reservationId, retryAfter?: number }
-//        or { allowed: false, reason: 'budget_exceeded' | 'depth_exceeded'
-//              | 'circuit_open' | 'concurrency_limit' | 'coordination_unavailable' }
+// decision: { allowed: true, reservationId, retryAfter?: number, degraded?: boolean }
+//        or { allowed: false, reason: 'budget_exceeded' | 'depth_exceeded' | 'unknown_agent'
+//              | 'circuit_open' | 'concurrency_exceeded' | 'redis_unavailable' | 'queue_timeout' }
+// degraded: true only when onRedisUnavailable: 'allow' admitted this call during an outage —
+// reservationId is null in that case (see reportOutcome's defined no-op for a null reservationId below)
 
 // Caller does its own downstream call here — entirely outside the broker
 
 await broker.reportOutcome({
-  reservationId: decision.reservationId,
+  reservationId: decision.reservationId,  // or null, for the degraded-admission no-op case
   success: true,
-  actualCost: 743,        // required if success: true, unless costUnknown
-  costUnknown: false,
-  retryable: undefined,   // only meaningful when success: false
+  actualCost: 743,        // omit entirely (not costUnknown: true) when actual cost can't be determined
+  retryable: undefined,   // required, not just meaningful, when success: false (ADR-0017)
 });
+// result: { allowed: true, costUnknown: boolean, poolMissing: boolean, degraded?: boolean }
+//      or { allowed: false, reason: 'unknown_reservation' | 'already_resolved' }
 
-// Budget top-up — additive only, no arbitrary "set" operation (ADR-21)
+// Budget top-up — additive only, no arbitrary "set" operation (ADR-0025)
 await broker.addBudget('user-123', 1000);
 
 // Explicit cleanup (in addition to TTL-based expiry)
@@ -443,11 +484,14 @@ Since the broker no longer owns downstream execution at all (post-pivot), there 
 
 Deliberately small, per an explicit decision to avoid building an observability platform:
 
-- `onDecision` hook — fires on every `requestPermission` outcome: `{ agentId, rootId, budgetKey, target, allowed, reason?, retryAfter? }`.
+- `onDecision` hook — fires on every `requestPermission` outcome: `{ agentId, target, result }`.
 - `onOutcome` hook — fires on every `reportOutcome` call, similar shape.
-- `onCircuitStateChange` hook — fires only on `closed → open → recovering → closed` transitions.
+- `onCircuitStateChange` hook — fires only on `closed → open` and `open → closed` transitions (two states as shipped — see Section 9 and [ADR-0010](adr/0010-single-probe-circuit-recovery.md) — not the three-state `closed → open → recovering → closed` cycle this document originally described).
+- `onCleanup` hook — fires when a lazy sweep resolves a genuinely abandoned reservation. Not present in the original draft's three-hook list; added during implementation alongside the lazy-cleanup mechanism in Section 10, since an abandoned reservation being quietly resolved is itself a real, hook-worthy event (and distinctly different from an explicit `reportOutcome` call, which already fires `onOutcome`).
 
-The broker emits raw signal via these hooks; it does **not** aggregate metrics, format logs, integrate with a specific tracing system, or provide a dashboard. The consuming application wires these hooks into whatever tooling it already uses. This boundary was deliberate — the developer already has strong instincts here from prior projects (typed error taxonomies, ADR authorship) and the library should not impose opinions where the consuming application already has good ones.
+**Divergence from the original design, recorded in [ADR-0009](adr/0009-fire-and-forget-hooks.md):** every hook is fire-and-forget by construction — invoked synchronously inside a `try/catch`, any returned promise's rejection silently discarded, never awaited before the triggering call returns, and never able to alter the broker's own return value, latency, or error state. This wasn't explicitly specified in the original design and was decided during implementation: a hook exists purely to *observe*, and if a buggy or slow integrator-supplied callback could delay or break an actual admission decision, every hook would become a reliability risk sitting directly in the hot path of a safety-critical system — exactly backwards from what an observability hook is for. `hooks.test.ts` directly asserts this: a hook configured to unconditionally throw does not affect the correctness of the `requestPermission()` call that triggered it.
+
+The broker emits raw signal via these hooks; it does **not** aggregate metrics, format logs, integrate with a specific tracing system, or provide a dashboard. The consuming application wires these hooks into whatever tooling it already uses. This boundary was deliberate — the developer already has strong instincts here from prior projects (typed error taxonomies, ADR authorship) and the library should not impose opinions where the consuming application already has good ones. See [`positioning.md`](positioning.md) for the planned (not yet built) observability layer that sits *on top of* this deliberately small hook surface, as a separate, optional package rather than an expansion of the core.
 
 ---
 
@@ -528,29 +572,38 @@ These were surfaced during an explicit "try to break the design" review conducte
 
 ## 21. Architecture Decision Records (ADR Log)
 
-Recorded in the order they were made during the design session, including rejected alternatives where relevant.
+Every decision below now has its own file in [`docs/adr/`](adr/), in the `Context` / `Decision` / `Reasoning` / `Alternatives considered` / `Consequences` format, with full cross-links to the other ADRs and sections it relates to. This section used to carry the decisions as inline one-paragraph bullets, numbered in the order they were made during the original design session (`ADR-1` through `ADR-21`, no leading zeros); that inline log has been fully extracted into individual files (numbered `ADR-0001` onward, with leading zeros, in the order the files were created rather than the order the original decisions were made) so that each decision can be linked to directly from wherever it's relevant, rather than only findable by scrolling to this section. The table below maps every original inline decision to its file, so nothing from the original log is lost.
 
-- **ADR-1:** Downstream target is an opaque, caller-supplied string key (recommended convention `provider:model`), not a structure the broker parses. Rejected: provider-only (too coarse, mixes resources with different rate limits/pricing) and endpoint-level (unnecessary — this is not a general HTTP proxy).
-- **ADR-2:** *(Superseded by ADR-9 — kept for historical context.)* Originally: broker owns provider invocation directly (callers pass data, not functions), specifically so retries could not be hidden from coordination inside a caller-supplied callback.
-- **ADR-3:** The library never reads `process.env` directly. All configuration, including any downstream connection details, is passed explicitly at `createBroker()` initialization by the consuming application, which manages its own secrets however it already does.
-- **ADR-4:** Agent identity is broker-issued, never caller-chosen. Depth is broker-computed from parent lookup, never self-reported.
-- **ADR-5:** Agent lifecycle uses TTL + heartbeat-on-call as the actual safety net. Optional SIGTERM-triggered graceful deregistration is a courtesy addition, not a replacement — it cannot cover hard kills, power loss, or OOM termination, which no process-internal code can react to.
-- **ADR-6:** Budget is scoped by an explicit `budgetKey`, declared only at root registration and inherited by all descendants — not a broker-level setting (would force one key for every tree on that broker) and not a per-child setting (unnecessary, would break inheritance).
-- **ADR-7:** An unspecified `budgetKey` defaults to the root's own broker-issued ID (private-by-default), not a shared fixed string. Rejected: a single fixed default (e.g., `"__default__"`) risked accidental cross-feature budget sharing when two unrelated callers both simply omitted the key.
-- **ADR-8:** No separate "broker ID" concept exists for cross-process/cross-instance sharing. This need is already fully satisfied by (a) pointing multiple processes at the same Redis instance and (b) using the same `budgetKey` — introducing a second, overlapping mechanism for the same goal was explicitly rejected as unnecessary complexity.
-- **ADR-9 (major pivot):** The broker does **not** execute downstream calls. It is a pure permission gate: `requestPermission()` / `reportOutcome()`. This reverses ADR-2. Rationale: restricting the broker to an LLM-shaped `DownstreamProvider` interface artificially narrowed the system's applicability; accepting arbitrary caller-supplied functions (the alternative considered) would have let callers hide internal retries from the broker's coordination, silently defeating the retry-correlation mechanism (Section 9) in the most natural way someone would misuse the library. A pure gate sidesteps this dilemma entirely: the caller must request permission before *each individual attempt*, which is what actually makes retries visible — not broker-owned execution. Accepted cost: the broker's knowledge of call success/failure becomes entirely second-hand (trust-based), formalized in Section 17/18.
-- **ADR-10:** `retryable` is a caller-supplied classification on `reportOutcome`, used only to gate whether a failure counts toward shared circuit-breaker state — explicitly never mixed into budget/concurrency reconciliation, to prevent unrelated caller-side bugs from falsely tripping the circuit for a healthy target.
-- **ADR-11:** Concurrency limiting is a distinct mechanism from depth (an earlier assumption that depth already covered this was identified as incorrect during design). Tracked per `target` + `budgetKey`, with caller-chosen `deny` (default) or `queue` mode.
-- **ADR-12:** Reservation TTL is caller-supplied per call (bounded by a broker-level default and hard maximum), since only the caller has realistic knowledge of expected task duration. A single fixed broker-wide TTL was rejected as unable to serve both fast and slow call types well.
-- **ADR-13:** `actualCost` is required on a successful `reportOutcome`. Unknown cost must be reported via an explicit `costUnknown: true` signal, never silently defaulted to an arbitrary placeholder number (e.g. `1`), which would corrupt accounting invisibly.
-- **ADR-14:** Retry coordination uses a standard three-state circuit breaker (closed/open/recovering) with probe-based recovery, not fixed-cooldown recovery — chosen because fixed cooldown provides no mechanism to learn the target has actually recovered before the cooldown arbitrarily expires.
-- **ADR-15:** Reservation cleanup is lazy (checked on next touch of the relevant counters), not event-driven via Redis keyspace notifications. The event-driven approach was explicitly considered and deferred — it requires a Redis config flag not on by default, plus a new persistent subscriber process, which is real added operational weight not justified for v1.
-- **ADR-16:** `rootId` is stored explicitly on every agent at registration (copied from the parent, or self if root), not re-derived by walking the parent chain on demand — keeps root lookups O(1) regardless of tree depth.
-- **ADR-17:** True rolling-window rate limiting (e.g., "no more than X in any rolling 60-minute window") is deferred as a separate, harder mechanism requiring its own dedicated design (sliding-window or bucketed counting with real edge cases at bucket boundaries). For v1, application-triggered scheduled budget reset (calling a reset operation on a cron schedule) is judged sufficient for the common "budget over a time period" need, since it reuses the existing budget mechanism with no new Redis structures.
-- **ADR-18:** `requestPermission` is backed by exactly **one** combined Lua script performing budget check+reserve, concurrency check+increment, and circuit-breaker check (including atomic probe-slot allocation) together. Splitting this into multiple smaller scripts was explicitly considered and rejected, since it would reintroduce, at the code-organization level, precisely the cross-process race the single-script design exists to eliminate.
-- **ADR-19:** Broker-level configuration (`maxDepth`, circuit breaker thresholds, TTL bounds, etc.) is immutable for the lifetime of a given broker instance. Different limits require constructing a new broker instance, not mutating an existing one — avoids the unanswerable question of what happens to already-registered agents that would become retroactively non-compliant under changed limits.
-- **ADR-20:** Agent identity fields (`depth`, `parentId`, `rootId`) are permanently immutable once set at registration. No update path exists or should be added — any such path would be a direct bypass of the trust model established in Section 6.
-- **ADR-21:** Budget supports an explicit, additive-only `addBudget()` operation. No arbitrary "set to X" operation exists, since that could be used to erase a legitimately-incurred reconciliation deficit.
+Decisions that were found or refined **during implementation**, after the original design session, are marked accordingly — these were never part of the original inline numbering at all.
+
+| Decision | File | Notes |
+|---|---|---|
+| Target is an opaque, caller-supplied string key | [ADR-0011](adr/0011-opaque-target-string.md) | originally "ADR-1" |
+| Broker-owned downstream execution | [ADR-0026](adr/0026-broker-owned-execution-historical.md) | originally "ADR-2" — historical only, superseded before implementation began |
+| Library never owns its own Redis connection / reads env vars | [ADR-0006](adr/0006-no-owned-redis-connection.md) | originally "ADR-3" |
+| Broker-issued identity, broker-computed depth | [ADR-0012](adr/0012-broker-derived-identity-and-depth.md) | originally "ADR-4" |
+| TTL + heartbeat-on-call lifecycle | [ADR-0013](adr/0013-ttl-heartbeat-lifecycle.md) | originally "ADR-5" |
+| `budgetKey` declared only at root, inherited by descendants | [ADR-0014](adr/0014-budgetkey-inheritance.md) | originally "ADR-6" |
+| `budgetKey` defaults to the root's own agent ID | [ADR-0015](adr/0015-budgetkey-default.md) | originally "ADR-7" |
+| No separate cross-instance sharing mechanism beyond Redis + `budgetKey` | [ADR-0016](adr/0016-no-cross-instance-sharing-mechanism.md) | originally "ADR-8" |
+| Pure permission gate — broker never executes downstream calls | [ADR-0004](adr/0004-no-provider-abstraction.md) | originally "ADR-9" (the pivot that superseded ADR-2/0026) |
+| `retryable` gates circuit-breaker accounting only | [ADR-0017](adr/0017-retryable-gates-circuit-only.md) | originally "ADR-10" |
+| Concurrency limiting is distinct from depth | [ADR-0018](adr/0018-concurrency-distinct-from-depth.md) | originally "ADR-11" |
+| Reservation TTL is caller-supplied per call, bounded | [ADR-0019](adr/0019-caller-supplied-reservation-ttl.md) | originally "ADR-12" |
+| `actualCost` / unknown-cost handling | [ADR-0020](adr/0020-actualcost-and-costunknown.md) | originally "ADR-13" — refined during implementation, see the file for what changed |
+| Circuit-breaker recovery model | [ADR-0010](adr/0010-single-probe-circuit-recovery.md) | originally "ADR-14" — **superseded** during implementation: two states, not three; see the file |
+| Lazy reservation cleanup, not event-driven | [ADR-0001](adr/0001-reservation-ttl-and-lazy-cleanup.md) | originally "ADR-15" |
+| `rootId` stored explicitly at registration | [ADR-0021](adr/0021-rootid-stored-explicitly.md) | originally "ADR-16" |
+| Rolling-window rate limiting deferred | [ADR-0022](adr/0022-rolling-window-rate-limiting-deferred.md) | originally "ADR-17" |
+| Single combined admission Lua script | [ADR-0023](adr/0023-single-combined-admission-script.md) | originally "ADR-18" |
+| Immutable broker configuration | [ADR-0007](adr/0007-immutable-broker-config.md) | originally "ADR-19" |
+| Immutable identity fields after registration | [ADR-0024](adr/0024-immutable-identity-fields.md) | originally "ADR-20" |
+| Additive-only `addBudget()` | [ADR-0025](adr/0025-additive-only-budget.md) | originally "ADR-21" |
+| `reportOutcome` refund formula | [ADR-0002](adr/0002-reportoutcome-refund-formula.md) | found/refined during implementation — not part of the original numbered log |
+| Behavior when a budget pool is deleted externally | [ADR-0003](adr/0003-budget-pool-deletion-handling.md) | found during review, not original design |
+| Cross-process test harness built on `child_process.fork()` | [ADR-0005](adr/0005-cross-process-test-harness.md) | formalizes the approach described in Section 14, not part of the original numbered log |
+| Length-prefixed key segments | [ADR-0008](adr/0008-length-prefixed-key-segments.md) | found during implementation — not part of the original numbered log |
+| Fire-and-forget observability hooks | [ADR-0009](adr/0009-fire-and-forget-hooks.md) | decided during implementation — not part of the original numbered log |
 
 ---
 
