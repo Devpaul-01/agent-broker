@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-broker"
+version = "0.1.0"
+description = "Redis-coordinated admission control (shared budgets, concurrency limits, circuit breaking) for independent agent processes — Python implementation."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Agent Broker contributors" }]
+keywords = ["redis", "coordination", "concurrency", "rate-limiting", "circuit-breaker", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Distributed Computing",
+    "Typing :: Typed",
+]
+# redis-py >=5.0 ships the modern redis.asyncio client with native EVALSHA/NOSCRIPT handling;
+# that's the actual floor this library depends on, not an arbitrary "latest and greatest" pin.
+dependencies = [
+    "redis>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "mypy>=1.11",
+]
+
+[project.urls]
+Homepage = "https://github.com/Devpaul-01/agent-broker"
+Repository = "https://github.com/Devpaul-01/agent-broker"
+Issues = "https://github.com/Devpaul-01/agent-broker/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_broker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: requires a real Redis instance (see tests/integration/conftest.py)",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
