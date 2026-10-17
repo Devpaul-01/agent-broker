@@ -17,6 +17,7 @@ import asyncio
 import time
 
 from . import keys
+from ._hmget2 import hmget_budget_key_and_target
 from ._hooks import fire_hook
 from .config import ResolvedConfig
 from .resolution import ResolveParams, resolve_reservation
@@ -24,25 +25,6 @@ from .resolution import ResolveParams, resolve_reservation
 # Bounded per-call work: each request_permission call sweeps at most this many expired-but-
 # unresolved reservations. Matches CLEANUP_BATCH_SIZE in src/admission/cleanup.ts exactly.
 _CLEANUP_BATCH_SIZE = 5
-
-
-async def _hmget_budget_key_and_target(redis: object, key: str) -> dict[str, str] | None:
-    """Python equivalent of hmgetBudgetKeyAndTarget (src/redis/hmget2.ts).
-
-    TypeScript needed this as a narrow-typing helper; Python's structural typing has no
-    equivalent need, but the function is kept as its own unit for the same reason the TS
-    version is: a single place that defines "a reservation hash with both required fields
-    present" so every call site gets the same None-safety guarantee.
-    """
-    result = await redis.hmget(key, "budgetKey", "target")  # type: ignore[attr-defined]
-    budget_key, target = result[0], result[1]
-    if budget_key is None or target is None:
-        return None
-    if isinstance(budget_key, bytes):
-        budget_key = budget_key.decode("utf-8")
-    if isinstance(target, bytes):
-        target = target.decode("utf-8")
-    return {"budgetKey": budget_key, "target": target}
 
 
 async def sweep_expired_reservations(config: ResolvedConfig) -> None:
@@ -73,7 +55,7 @@ async def sweep_expired_reservations(config: ResolvedConfig) -> None:
             if isinstance(reservation_id_raw, bytes)
             else str(reservation_id_raw)
         )
-        fields = await _hmget_budget_key_and_target(config.redis, keys.reservation(reservation_id))
+        fields = await hmget_budget_key_and_target(config.redis, keys.reservation(reservation_id))
         if fields is None:
             # Hash already gone (past grace period) — nothing to refund, just drop the stale
             # sorted-set entry so future sweeps don't keep rediscovering it.
