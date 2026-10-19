@@ -1,0 +1,67 @@
+{
+  "$schema_note": "Each case specifies an operation sequence against one freshly-registered root agent, run entirely through ONE worker (language chosen by the runner), then asserts on the returned results and final Redis state directly. The point of a *shared* fixture is that the same case, unchanged, is run once per language by test_shared_cases.py/.ts and must produce identical results and identical final Redis state either way - this is what actually proves behavioral equivalence, rather than two independently-written test suites that could silently drift apart in what they each choose to assert.",
+  "cases": [
+    {
+      "name": "simple_admit_and_full_refund_on_failure",
+      "initial_budget": 1000,
+      "operations": [
+        { "op": "requestPermission", "target": "t", "estimatedCost": 300, "expect_allowed": true },
+        { "op": "reportOutcome", "success": false, "retryable": false, "expect_allowed": true }
+      ],
+      "expected_final_budget": 1000,
+      "invariants": [
+        "budget is never negative at any point",
+        "exactly one reservation key existed between the two operations"
+      ]
+    },
+    {
+      "name": "partial_refund_on_success_with_actual_cost",
+      "initial_budget": 1000,
+      "operations": [
+        { "op": "requestPermission", "target": "t", "estimatedCost": 300, "expect_allowed": true },
+        { "op": "reportOutcome", "success": true, "actualCost": 120, "expect_allowed": true }
+      ],
+      "expected_final_budget": 880,
+      "invariants": ["budget is never negative at any point"]
+    },
+    {
+      "name": "zero_refund_on_success_with_no_actual_cost",
+      "initial_budget": 1000,
+      "operations": [
+        { "op": "requestPermission", "target": "t", "estimatedCost": 300, "expect_allowed": true },
+        { "op": "reportOutcome", "success": true, "expect_allowed": true, "expect_cost_unknown": true }
+      ],
+      "expected_final_budget": 700,
+      "invariants": ["budget is never negative at any point"]
+    },
+    {
+      "name": "budget_exceeded_denial_reserves_nothing",
+      "initial_budget": 5,
+      "operations": [
+        { "op": "requestPermission", "target": "t", "estimatedCost": 10, "expect_allowed": false, "expect_reason": "budget_exceeded" }
+      ],
+      "expected_final_budget": 5,
+      "invariants": ["a denial never changes the budget balance"]
+    },
+    {
+      "name": "resolving_twice_is_idempotent",
+      "initial_budget": 1000,
+      "operations": [
+        { "op": "requestPermission", "target": "t", "estimatedCost": 300, "expect_allowed": true, "save_reservation_as": "r1" },
+        { "op": "reportOutcome", "reservation_ref": "r1", "success": false, "retryable": false, "expect_allowed": true },
+        { "op": "reportOutcome", "reservation_ref": "r1", "success": false, "retryable": false, "expect_allowed": false, "expect_reason": "already_resolved" }
+      ],
+      "expected_final_budget": 1000,
+      "invariants": ["a refund is never applied twice for the same reservation"]
+    },
+    {
+      "name": "unknown_agent_is_denied_without_touching_budget",
+      "initial_budget": 1000,
+      "operations": [
+        { "op": "requestPermission", "target": "t", "estimatedCost": 1, "agent_id_override": "00000000-0000-0000-0000-000000000000", "expect_allowed": false, "expect_reason": "unknown_agent" }
+      ],
+      "expected_final_budget": 1000,
+      "invariants": ["an unknown-agent denial never touches any budget pool"]
+    }
+  ]
+}

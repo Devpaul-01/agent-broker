@@ -16,9 +16,17 @@ than inside either language's own test tree.
   `test/helpers/worker.ts`, the TS-only cross-process harness) only exists between two Node
   processes, so a Python parent can't use it directly.
 - `harness.py` spawns either worker as a real OS subprocess and drives it over that protocol.
-- `test_cross_language.py` holds the actual test scenarios: one worker of each language, with
-  assertions that read the *other* language's result, or Redis directly, to confirm both sides
-  genuinely observe the same coordination state.
+- `test_cross_language.py` holds the **cooperation** scenarios: one worker of each language in
+  the same test, with assertions that read the *other* language's result, or Redis directly, to
+  confirm both sides genuinely observe the same coordination state (e.g. TS registers, Python
+  admits against it).
+- `fixtures/behavioral_cases.json` + `test_shared_cases.py` hold the **equivalence** scenarios: a
+  language-neutral operation sequence (initial budget, a list of `requestPermission`/
+  `reportOutcome` steps, expected results, expected final Redis state, invariants) defined once
+  and replayed unchanged through *each* language's worker in turn — proving the same case
+  produces the same result independent of which language executed it, which is a different (and
+  equally necessary) claim from the cooperation scenarios proving two *different* languages can
+  act on one shared piece of state together.
 
 ## Prerequisites
 
