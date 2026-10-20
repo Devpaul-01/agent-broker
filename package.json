@@ -1,6 +1,6 @@
 {
   "name": "agent-broker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "An in-process TypeScript library coordinating budget reservation, concurrency limiting, and circuit breaking across independent Node.js processes via Redis.",
   "type": "module",
   "license": "MIT",
@@ -22,7 +22,9 @@
     "coordination",
     "distributed-systems"
   ],
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
