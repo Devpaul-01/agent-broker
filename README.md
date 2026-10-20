@@ -42,6 +42,8 @@ Requires Node.js 22 or later, and a reachable Redis instance (local, containeriz
 
 `ioredis` is a peer dependency — you bring your own Redis connection; the library never manages one itself (see [ADR-0006](docs/adr/0006-no-owned-redis-connection.md)).
 
+Using Python instead? See [Python](#python) below — it's a separate, genuine implementation of this same library, not a wrapper around this one.
+
 ## Quick start
 
 ```ts
@@ -224,6 +226,49 @@ See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) for
 lifecycle, Redis data model, and failure model — including diagrams of each of the mechanisms
 above.
 
+## Python
+
+Agent Broker also has a full Python implementation, living in [`python/`](python/) in this same
+repository. It's a genuine port — real Python, built against [`redis-py`](https://github.com/redis/redis-py) — not a wrapper that shells out to this TypeScript package, so using it
+never requires Node.js.
+
+**Which one should you use?** If your application is in Node.js/TypeScript, use this package. If
+it's in Python, use the Python package. Both implement the same coordination model (shared
+budgets, delegation depth, concurrency limits, circuit breaking) against the same Redis data
+model, so the choice is purely about which language your application is already in — not a
+feature tradeoff in either direction.
+
+**Can both languages coordinate through the same Redis?** Yes. Both implementations use
+byte-identical Redis key construction and the exact same Lua scripts for every atomic operation
+(verified by an automated test that diffs the Python copies against this package's own source on
+every test run — see [`docs/python-port/ARCHITECTURE.md`](docs/python-port/ARCHITECTURE.md)), so
+a TypeScript process and a Python process can register agents, request permission, and resolve
+reservations against the very same budget pool, target, and circuit-breaker state. This is
+exercised directly by real cross-language integration tests — not just asserted — in
+[`test/cross-language/`](test/cross-language/): a TypeScript process registering an agent that a
+Python process then calls `requestPermission` against (and the reverse), both languages racing
+concurrently for one shared budget pool, one language's failures opening the circuit breaker and
+being observed as `circuit_open` by the other, and a reservation created by one language being
+recovered by the other's lazy cleanup sweep.
+
+Install with:
+
+```bash
+pip install -e python/  # from a checkout of this repository; see python/README.md for details
+```
+
+(`agent-broker` is not yet published to PyPI — see
+[`docs/python-port/IMPLEMENTATION_PLAN.md`](docs/python-port/IMPLEMENTATION_PLAN.md), Milestone 6,
+for packaging/release status.)
+
+Python-specific documentation, the full API reference, and usage examples live in
+[`python/README.md`](python/README.md) and [`python/examples/`](python/examples/). For the
+engineering history of the port itself — what was audited, how milestones were sequenced, and
+exactly what's been verified and how — see [`docs/python-port/`](docs/python-port/), in
+particular [`FEATURE_PARITY_MATRIX.md`](docs/python-port/FEATURE_PARITY_MATRIX.md) for a
+feature-by-feature status table and [`patches/python-port/MANIFEST.md`](patches/python-port/MANIFEST.md)
+for the verified milestone patches that built it.
+
 ## Project status and roadmap
 
 This library solves cross-process budget, depth, and retry-storm coordination, and that core is tested under real multi-process concurrency (see [`docs/agent-broker-architecture.md#14-testing-architecture`](docs/agent-broker-architecture.md#14-testing-architecture)). It does **not** yet have agent-aware call metadata, framework-protocol adapters (MCP or similar), or a built-in observability surface beyond the four hooks above — these are intentional, not finished, and the plan for closing that gap honestly (including why it's a layer on top rather than a rewrite) is in [`docs/positioning.md`](docs/positioning.md). If you're evaluating this for an agent-framework integration today, read that document first.
@@ -233,6 +278,8 @@ This library solves cross-process budget, depth, and retry-storm coordination, a
 - [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) — full design rationale, invariants, Redis data model, failure model, and the ADR log
 - [`docs/positioning.md`](docs/positioning.md) — honest take on what this is, what it isn't yet, and the intended path to agent-framework integration
 - [`docs/adr/`](docs/adr/) — architecture decision records, including rejected alternatives
+- [`python/README.md`](python/README.md) — Python package documentation, installation, and usage (see [Python](#python) above)
+- [`docs/python-port/`](docs/python-port/) — the Python port's architecture, feature parity status, and implementation plan
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — local setup, test commands, and PR expectations
 - [`RELEASE.md`](RELEASE.md) — versioning policy and the release procedure
 - [`SECURITY.md`](SECURITY.md) — how to report a vulnerability
