@@ -1,5 +1,7 @@
 # Release procedure
 
+`agent-broker` is published and live on [npm](https://www.npmjs.com/package/agent-broker).
+
 This document describes how to cut a release of `agent-broker`. It is the single source of
 truth for the publish process — follow it top to bottom rather than running steps from memory.
 
