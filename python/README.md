@@ -3,8 +3,9 @@
 **A Redis-backed coordination gate for multi-process agent and LLM-calling systems — the Python
 implementation.**
 
-This is a genuine Python port of [Agent Broker](../README.md), the TypeScript library in the
-root of this repository: real Python, built on [`redis-py`](https://github.com/redis/redis-py),
+This is a genuine Python port of [Agent Broker](../README.md), the TypeScript library in
+[`typescript/`](../typescript) at the root of this repository: real Python, built on
+[`redis-py`](https://github.com/redis/redis-py),
 not a wrapper that shells out to Node.js. No Node.js installation is required to use this
 package. It answers the same question, under the same guarantees, across real process and
 language boundaries: *"Is this call allowed to happen right now?"* — accounting for shared

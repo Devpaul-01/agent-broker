@@ -22,8 +22,8 @@
  */
 import { createInterface } from "node:readline";
 import { Redis } from "ioredis";
-import { createBroker, type Broker, type BrokerOptions } from "../../src/index.js";
-import { TEST_REDIS_URL } from "../helpers/redis.js";
+import { createBroker, type Broker, type BrokerOptions } from "../../typescript/src/index.js";
+import { TEST_REDIS_URL } from "../../typescript/test/helpers/redis.js";
 
 interface WorkerTask {
   task: "requestPermission" | "reportOutcome" | "registerChild" | "registerRoot";

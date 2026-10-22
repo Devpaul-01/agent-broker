@@ -38,7 +38,7 @@ than inside either language's own test tree.
   test in this repository).
 - The Python package installed (`pip install -e python/`, or just having `python/src` on
   `PYTHONPATH`, which `harness.py` and the test file already arrange via `sys.path.insert`).
-- Node dependencies installed at the repository root (`npm install`).
+- Node dependencies installed in `typescript/` (`cd typescript && npm install`).
 
 ## Running
 
@@ -54,7 +54,7 @@ cd python && python3 -m pytest ../test/cross-language/ -v
 These tests are never silently skipped if Redis or `npx` is unavailable — a missing prerequisite
 surfaces as a clear failure (a `WorkerHandle` that fails to report ready, or a Redis connection
 error), the same fail-loud philosophy as every other integration test in this repository (see
-`test/helpers/redis.ts` and `python/tests/integration/conftest.py`).
+`typescript/test/helpers/redis.ts` and `python/tests/integration/conftest.py`).
 
 ## Adding a new cross-language scenario
 

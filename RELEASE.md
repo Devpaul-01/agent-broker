@@ -5,6 +5,9 @@
 This document describes how to cut a release of `agent-broker`. It is the single source of
 truth for the publish process — follow it top to bottom rather than running steps from memory.
 
+The TypeScript implementation lives in `typescript/` (mirroring `python/` for the Python port).
+Run every `npm` command in this document from inside that folder.
+
 There is currently no automated npm-publish workflow. CI (`.github/workflows/ci.yml`) validates
 every push and pull request (build, typecheck, full test suite, and a packed-consumer install
 test against both supported `ioredis` majors) but does not publish. Publishing is a deliberate,
@@ -13,10 +16,10 @@ manual action you take locally, described in full below.
 ## Versioning policy (semver)
 
 This package follows [semantic versioning](https://semver.org/). The public API is everything
-exported from `src/index.ts` — the `createBroker` factory, the `Broker` interface's methods,
-and the exported types (`BrokerOptions`, `RequestPermissionInput`, `Admitted`, `Denied`,
-`RegisterRootInput`, `RegisterChildInput`, etc.). Anything not exported from `src/index.ts` is
-internal and can change in a patch release without notice.
+exported from `typescript/src/index.ts` — the `createBroker` factory, the `Broker` interface's
+methods, and the exported types (`BrokerOptions`, `RequestPermissionInput`, `Admitted`, `Denied`,
+`RegisterRootInput`, `RegisterChildInput`, etc.). Anything not exported from
+`typescript/src/index.ts` is internal and can change in a patch release without notice.
 
 - **Patch (`0.1.x`)** — bug fixes that don't change any documented behavior or type shape;
   documentation-only changes; internal refactors with no observable effect; dependency bumps
@@ -60,7 +63,7 @@ exists because it catches a distinct class of problem (see the "why" column).
 | 2 | `npm run typecheck` | Type errors that `vitest` alone wouldn't catch |
 | 3 | `npm run redis:up` | Starts the local Redis the integration suite needs (`docker-compose.yml`, `redis:7-alpine` on `6379`) |
 | 4 | `npm run test:unit` | Fast, no-Redis-required tests: config validation, key construction, argument validation |
-| 5 | `npm run test:integration` | Redis-backed tests, including the cross-process harness (`test/helpers/harness.ts`) that forks real OS processes |
+| 5 | `npm run test:integration` | Redis-backed tests, including the cross-process harness (`typescript/test/helpers/harness.ts`) that forks real OS processes |
 | 6 | `npm run build` | Produces `dist/` from `tsconfig.build.json` — this is what actually ships |
 | 7 | `npm pack --dry-run` | Confirms the exact file list and size that will be published; compare against `package.json`'s `files` field if anything looks off |
 | 8 | `npm run redis:down` | Cleans up the local Redis container |

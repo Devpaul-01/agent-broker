@@ -9,9 +9,12 @@ Requires Node.js 22+ and Docker (for the local Redis used by integration tests).
 
 ```bash
 git clone https://github.com/Devpaul-01/agent-broker.git
-cd agent-broker
+cd agent-broker/typescript
 npm ci
 ```
+
+The TypeScript implementation lives in `typescript/` (mirroring `python/` for the Python port) —
+run all `npm` commands below from inside that folder.
 
 ## Running checks locally
 
@@ -30,14 +33,15 @@ run `npm run redis:up` first, or point `TEST_REDIS_URL` at an existing instance.
 ## Before opening a pull request
 
 - Run the full check list above; all of it should pass locally, not just `test:unit`.
-- If you touched `src/`, make sure `npm run build` still produces a clean `dist/` and
+- If you touched `typescript/src/`, make sure `npm run build` still produces a clean `dist/` and
   `npm run typecheck` is clean — these are both enforced in CI but worth checking locally first.
 - If your change affects documented behavior (anything in README.md or
   `docs/agent-broker-architecture.md`), update the relevant doc in the same PR. Treat the
   implementation as the source of truth and the docs as something that must track it — see
   `docs/adr/` for the convention this project uses to record *why* a decision was made, not just
   what it is.
-- If you're changing or adding to the public API (anything exported from `src/index.ts`), explain
+- If you're changing or adding to the public API (anything exported from
+  `typescript/src/index.ts`), explain
   the reasoning in the PR description: what problem it solves, and why the existing API couldn't
   express it. This project intentionally keeps its public surface small (see
   [ADR-0004](docs/adr/0004-no-provider-abstraction.md) for an example of a deliberate scope
@@ -49,7 +53,8 @@ run `npm run redis:up` first, or point `TEST_REDIS_URL` at an existing instance.
 
 `.github/workflows/ci.yml` runs on every push and pull request:
 
-1. **`test`** — `npm ci`, full test suite (`npm test`) against a real Redis service container.
+1. **`test`** — `npm ci`, full test suite (`npm test`) against a real Redis service container,
+   run with `typescript/` as the working directory.
 2. **`pack-and-install`** (depends on `test` passing) — builds, runs `npm pack`, installs the
    actual packed tarball into an independent consumer project, and runs a real smoke test
    against it, across both supported `ioredis` majors (`^5` and `^6`). This is the test that

@@ -23,6 +23,8 @@ from agent_broker import _scripts
 
 # Repository root is five levels up from this file: python/tests/unit/test_x.py -> repo root.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+# The TypeScript package lives in its own subfolder, mirroring python/'s own subfolder.
+_TYPESCRIPT_DIR = _REPO_ROOT / "typescript"
 
 
 def _extract_template_literal(ts_source: str, script_const_name: str) -> str:
@@ -57,7 +59,7 @@ def _extract_template_literal(ts_source: str, script_const_name: str) -> str:
     ],
 )
 def test_lua_source_matches_typescript_verbatim(ts_file: str, ts_const: str, py_source: str) -> None:
-    ts_path = _REPO_ROOT / ts_file
+    ts_path = _TYPESCRIPT_DIR / ts_file
     assert ts_path.is_file(), f"expected TS source at {ts_path}, repository layout may have changed"
     ts_source = ts_path.read_text(encoding="utf-8")
     ts_lua = _extract_template_literal(ts_source, ts_const)

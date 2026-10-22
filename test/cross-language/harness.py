@@ -22,6 +22,7 @@ from typing import Any, Literal
 
 _CROSS_LANG_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _CROSS_LANG_DIR.parent.parent
+_TYPESCRIPT_DIR = _REPO_ROOT / "typescript"
 
 WorkerKind = Literal["python", "typescript"]
 
@@ -52,9 +53,14 @@ class WorkerHandle:
         else:
             raise ValueError(f"unknown worker kind: {kind}")
 
+        # The TypeScript worker needs to run with `typescript/` as its cwd so that `npx tsx`
+        # resolves node_modules and package.json ("type": "module") from the right place now
+        # that the TS package lives in its own subfolder, mirroring python/'s own subfolder.
+        worker_cwd = _TYPESCRIPT_DIR if kind == "typescript" else _REPO_ROOT
+
         self._proc = subprocess.Popen(
             cmd,
-            cwd=str(_REPO_ROOT),
+            cwd=str(worker_cwd),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

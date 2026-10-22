@@ -25,8 +25,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: typescript/package-lock.json
       - run: npm ci
+        working-directory: typescript
       - run: npm test
+        working-directory: typescript
 
   pack-and-install:
     needs: test
@@ -52,13 +55,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: typescript/package-lock.json
       - run: npm ci
+        working-directory: typescript
       - run: npm run build
+        working-directory: typescript
       - run: npm pack
+        working-directory: typescript
       - name: Install the packed tarball into a clean consumer project
         run: |
           mkdir -p /tmp/consumer
-          cp agent-broker-*.tgz /tmp/consumer/
+          cp typescript/agent-broker-*.tgz /tmp/consumer/
           cd /tmp/consumer
           npm init -y
           npm install "ioredis@${{ matrix.ioredis-version }}"
