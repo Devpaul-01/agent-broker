@@ -23,4 +23,4 @@ One repository, not a split. The core `agent-broker` package stays exactly as sc
 
 ## Where things stand right now
 
-The core coordination library — budget, depth, and retry-storm coordination, tested under real multi-process concurrency — is finished. Everything above is the roadmap I'm building toward, not something that exists yet. If you're looking at this today for an agent-framework integration: the safety-critical foundation is solid, and the agent-aware layer on top of it is what I'm building next.
+The core coordination library — budget, depth, and retry-storm coordination, tested under real multi-process concurrency — is finished, and it's published and live on [npm](https://www.npmjs.com/package/agent-broker): `npm install agent-broker ioredis` works today. Everything above is the roadmap I'm building toward, not something that exists yet. If you're looking at this today for an agent-framework integration: the safety-critical foundation is solid, and the agent-aware layer on top of it is what I'm building next.

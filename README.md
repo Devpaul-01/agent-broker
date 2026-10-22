@@ -1,6 +1,8 @@
 # agent-broker
 
-**A Redis-backed coordination gate for multi-process agent and LLM-calling systems.**
+[![npm version](https://img.shields.io/npm/v/agent-broker.svg)](https://www.npmjs.com/package/agent-broker)
+
+**A Redis-backed coordination gate for multi-process agent and LLM-calling systems.** Published and live on npm.
 
 `agent-broker` answers one question, correctly, under real concurrency, across real process boundaries: *"Is this call allowed to happen right now?"* — accounting for shared budget, delegation depth, in-flight concurrency, and recent failure history against the target you're about to call.
 
@@ -33,6 +35,8 @@ It is also not a security boundary against a malicious caller. It protects again
 ---
 
 ## Installation
+
+`agent-broker` is [published on npm](https://www.npmjs.com/package/agent-broker) and live — no build step or git install required.
 
 ```bash
 npm install agent-broker ioredis
@@ -270,6 +274,8 @@ feature-by-feature status table and [`patches/python-port/MANIFEST.md`](patches/
 for the verified milestone patches that built it.
 
 ## Project status and roadmap
+
+`agent-broker` is published and live on [npm](https://www.npmjs.com/package/agent-broker) — `npm install agent-broker ioredis` works today.
 
 This library solves cross-process budget, depth, and retry-storm coordination, and that core is tested under real multi-process concurrency (see [`docs/agent-broker-architecture.md#14-testing-architecture`](docs/agent-broker-architecture.md#14-testing-architecture)). It does **not** yet have agent-aware call metadata, framework-protocol adapters (MCP or similar), or a built-in observability surface beyond the four hooks above — these are intentional, not finished, and the plan for closing that gap honestly (including why it's a layer on top rather than a rewrite) is in [`docs/positioning.md`](docs/positioning.md). If you're evaluating this for an agent-framework integration today, read that document first.
 
