@@ -1,1 +1,17 @@
+# OS
 .DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment files (keep examples if you add them)
+.env
+.env.*
+!.env.example
+
+# Logs (shared, harmless to keep at root too)
+*.log
