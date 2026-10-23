@@ -1,0 +1,72 @@
+{
+  "experiment": "M3-admission-latency",
+  "metadata": {
+    "runId": "488202db-e515-492f-859b-7d07b9cfcb58",
+    "timestampUtc": "2026-10-22T17:23:22.576Z",
+    "repo": {
+      "url": "https://github.com/Devpaul-01/agent-broker",
+      "commitSha": "1af5b72987ef450fae8229502b41f34676299485",
+      "branch": "main",
+      "dirty": false
+    },
+    "runtime": {
+      "node": "v22.22.2",
+      "os": "Linux 6.18.44-fc-v140",
+      "arch": "x64",
+      "cpuModel": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+      "cpuCount": 1,
+      "totalMemoryGb": 3.9
+    },
+    "redis": {
+      "version": "7.0.15"
+    },
+    "dependencies": {
+      "ioredis": "^5.4.1",
+      "typescript": "^5.6.0",
+      "tsx": "^4.19.0",
+      "vitest": "^5.0.0"
+    }
+  },
+  "workload": {
+    "n": 1000,
+    "warmupIterations": 50,
+    "concurrencyLevel": 1,
+    "target": "m3-bench-target",
+    "estimatedCostPerCall": 1,
+    "environment": "local Redis, localhost, single sequential client — best-case, not representative of production network latency"
+  },
+  "results": {
+    "atomicAdmissionScript": {
+      "n": 1000,
+      "minMs": 0.14,
+      "maxMs": 17.08,
+      "medianMs": 0.27,
+      "p90Ms": 0.71,
+      "p95Ms": 1.66,
+      "p99Ms": 5.16,
+      "meanMs": 0.53,
+      "stdDevMs": 1.18
+    },
+    "naiveThreeRoundTripComparison": {
+      "n": 1000,
+      "minMs": 0.04,
+      "maxMs": 1.92,
+      "medianMs": 0.05,
+      "p90Ms": 0.08,
+      "p95Ms": 0.08,
+      "p99Ms": 0.14,
+      "meanMs": 0.06,
+      "stdDevMs": 0.09
+    }
+  },
+  "correctness": {
+    "expectedFinalBalance": 1050,
+    "actualFinalBalance": 1050,
+    "balanceConsistent": true
+  },
+  "limitations": [
+    "Single-machine, localhost Redis: lower bound / best case, not representative of real network latency to a managed Redis instance.",
+    "Sequential (concurrency=1): does not reflect latency under contention — see M7 in METRICS_AUDIT.md for a concurrency sweep, not yet implemented.",
+    "The 3-round-trip comparison is a synthetic reference built only for this benchmark, not a reconstruction of any historical agent-broker implementation, and is not correctness-safe under concurrency (no atomicity, no writes) — it exists purely to quantify round-trip count overhead."
+  ]
+}
