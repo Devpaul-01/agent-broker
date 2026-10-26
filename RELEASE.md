@@ -8,7 +8,7 @@ truth for the publish process — follow it top to bottom rather than running st
 The TypeScript implementation lives in `typescript/` (mirroring `python/` for the Python port).
 Run every `npm` command in this document from inside that folder.
 
-There is currently no automated npm-publish workflow. CI (`.github/workflows/ci.yml`) validates
+There is currently no automated npm-publish workflow. CI (`.github/workflows/typescript.yml`) validates
 every push and pull request (build, typecheck, full test suite, and a packed-consumer install
 test against both supported `ioredis` majors) but does not publish. Publishing is a deliberate,
 manual action you take locally, described in full below.

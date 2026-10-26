@@ -21,5 +21,5 @@ Any operation that reads shared Redis state and then conditionally writes based 
 
 ## Consequences
 
-- The `REQUEST_PERMISSION` script is necessarily the most complex single piece of logic in the codebase — this is treated as the correct trade (one carefully-reviewed script) rather than a problem to be solved by splitting it, per `docs/agent-broker-architecture.md` Section 18's module boundaries, which deliberately does not split admission logic into per-concern submodules.
+- The `REQUEST_PERMISSION` script is necessarily the most complex single piece of logic in the codebase — this is treated as the correct trade (one carefully-reviewed script) rather than a problem to be solved by splitting it, per `docs/ARCHITECTURE.md` Section 18's module boundaries, which deliberately does not split admission logic into per-concern submodules.
 - Any future addition to admission-time checks (a new limit, a new condition) must be added to this one script, not as a separate round trip — this is the standing rule for anyone extending `requestPermission`.

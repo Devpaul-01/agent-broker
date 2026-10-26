@@ -17,7 +17,7 @@ maintained on a best-effort basis — but reports will be acknowledged and triag
 explicit about what it does and doesn't protect against: it protects against *accidental* and
 *architectural* misuse within a cooperating system, not against a malicious, non-cooperating
 caller inside the same process (see the README's "Trust model" section and
-[docs/agent-broker-architecture.md §17](docs/agent-broker-architecture.md#17-security-and-trust-boundaries)
+[docs/ARCHITECTURE.md §17](docs/ARCHITECTURE.md#17-security-and-trust-boundaries)
 for the full boundary discussion). Reports about behavior that falls inside that already-documented
 boundary (e.g. "a caller can misreport `actualCost` to `reportOutcome`") are known, by-design
 limitations, not vulnerabilities — but a report that identifies a way to violate a guarantee the

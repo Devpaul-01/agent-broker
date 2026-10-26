@@ -33,7 +33,7 @@ from agent_broker.broker import Broker
 
 async def handle_one_call(broker: Broker, root_agent_id: str, target: str, call_index: int) -> None:
     """Simulates one downstream call made on behalf of a session, via a dedicated child agent."""
-    child = await broker.register_child(RegisterChildInput(parent_id=root_agent_id))
+    child = await broker.register(RegisterChildInput(parent_id=root_agent_id))
     if isinstance(child, RegisterDenial):
         print(f"call {call_index}: could not register child agent: {child.reason}")
         return
@@ -70,7 +70,7 @@ async def main() -> None:
     client = redis.Redis.from_url("redis://localhost:6379", decode_responses=True)
     broker = create_broker(BrokerOptions(redis=client, concurrency_limit=3))
 
-    root = await broker.register_root(RegisterRootInput(budget_key="example-session", initial_budget=2000))
+    root = await broker.register(RegisterRootInput(budget_key="example-session", initial_budget=2000))
     print(f"session {root.agent_id} funded with budget pool {root.budget_key!r}")
 
     # Fire 10 concurrent calls through a concurrency limit of 3 - most will need to queue.

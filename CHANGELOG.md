@@ -5,12 +5,50 @@ All notable changes to this project are documented in this file. Format follows
 [Semantic Versioning](https://semver.org/) (see [RELEASE.md](RELEASE.md) for how it's applied
 pre-1.0).
 
-Nothing has been published to npm yet. Everything below is pre-first-release work.
+## Release status
+
+| Package | Registry | Status |
+|---|---|---|
+| TypeScript (`typescript/`) | [npm: `agent-broker`](https://www.npmjs.com/package/agent-broker) | **Published.** First version released on 2026-10-21. |
+| Python (`python/`) | PyPI | **Not yet published.** Feature-complete against the TypeScript API, but there is no PyPI release yet. |
 
 ## [Unreleased]
 
+### Added
+- GitHub Actions CI is now split into three path-filtered workflows —
+  `.github/workflows/typescript.yml`, `python.yml` and `cross-language.yml` — so the Python
+  suite (mypy strict, unit, integration, wheel build) and the cross-language suite finally run in
+  CI alongside the TypeScript one. Previously only the TypeScript tests ran.
+- Python: `Broker.register()`, a single registration method that takes either a
+  `RegisterRootInput` or a `RegisterChildInput`, matching the TypeScript `broker.register()`.
+  `register_root()` / `register_child()` remain as aliases.
+- Python: `tests/unit/test_public_api.py`, which fails if the top-level `agent_broker` exports
+  drift from `typescript/src/index.ts`.
+- README: noted that a LangGraph-native integration is currently in development (not yet
+  released).
+
+### Changed
+- Python: the top-level `agent_broker` public API now mirrors `typescript/src/index.ts`. It
+  exports `create_broker`, `Broker`, the option/input/result types, the denial-reason types
+  and the error classes. Lower-level functions (`request_permission`, `register_root`,
+  `parse_config`, `resolve_reservation`, `sweep_expired_reservations`, …) and the `keys` module
+  are no longer re-exported from the package root; import them from their submodules
+  (e.g. `agent_broker.admission`, `agent_broker.keys`). The Python package has not been
+  published, so no released version is affected.
+- Renamed `docs/agent-broker-architecture.md` to `docs/ARCHITECTURE.md` and updated every link
+  to it.
+
 ### Fixed
-- README.md and `docs/agent-broker-architecture.md` both incorrectly listed `'depth_exceeded'`
+- Cross-language tests: `ts_worker.ts` could not resolve `ioredis` after the TypeScript package
+  moved into `typescript/`, so every TypeScript-worker test failed. The harness now sets
+  `NODE_PATH` to `typescript/node_modules`.
+
+## [0.1.1] - 2026-10-21
+
+First version of the TypeScript package published to npm.
+
+### Fixed
+- README.md and `docs/ARCHITECTURE.md` both incorrectly listed `'depth_exceeded'`
   as a possible `requestPermission()` denial reason. It is a `register()`-only reason;
   `requestPermission()`'s real `DenialReason` type never includes it. Both docs corrected.
 

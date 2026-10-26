@@ -4,81 +4,53 @@ This is the Python implementation, a genuine port (not a Node.js wrapper) of the
 Agent Broker library in this same repository. See ``docs/python-port/`` at the repository root
 for the architecture, feature-parity status, and implementation plan.
 
-Public API, as of Milestone 4 — feature-complete relative to the TypeScript library's own
-documented public surface (cross-language and adversarial testing, docs, and packaging/release
-polish remain for Milestones 5-6 per ``docs/python-port/IMPLEMENTATION_PLAN.md``, but every
-operation the TS ``Broker`` interface exposes now has a Python equivalent):
+The public surface mirrors ``typescript/src/index.ts`` one-to-one:
 
-- ``create_broker`` / ``Broker`` — the top-level factory, mirroring ``createBroker`` in the TS
-  package (``agent_broker.broker``). The primary way most callers should use this library.
-- ``parse_config`` / ``BrokerOptions`` / ``ResolvedConfig`` / ``CircuitBreakerOptions`` /
-  ``BrokerHooks`` — configuration, for callers who want the lower-level functions directly
-  instead of going through ``Broker``.
-- ``BrokerConfigError`` / ``BrokerArgumentError`` / ``BrokerError`` — error classes.
-- ``keys`` — Redis key construction (importable as ``agent_broker.keys``), part of the
-  cross-language shared protocol.
-- ``request_permission`` / ``RequestPermissionInput`` / ``Admitted`` / ``Denied`` — core
-  admission (``agent_broker.admission``).
-- ``request_permission_queued`` / ``QueueOptions`` — polling admission with backoff, cooperative
-  cancellation via ``cancel_event`` (``agent_broker.queue``).
-- ``report_outcome`` / ``ReportOutcomeInput`` / ``Resolved`` / ``ReportDenial`` — the public,
-  validating wrapper for resolving a reservation (``agent_broker.resolution``).
-- ``resolve_reservation`` / ``ResolveParams`` / ``ResolveOutcome`` / ``ResolveSkipped`` — the
-  lower-level resolution engine ``report_outcome`` and lazy cleanup both delegate to.
-- ``sweep_expired_reservations`` — lazy cleanup, called automatically by ``request_permission``
-  (``agent_broker.cleanup``).
-- ``register_root`` / ``RegisterRootInput`` / ``RootAgent`` — root agent registration.
-- ``register_child`` / ``RegisterChildInput`` / ``ChildAgent`` / ``RegisterDenial`` — delegated
-  child agent registration, atomic depth-cap enforcement (``agent_broker.agents``).
-- ``deregister`` / ``DeregisterResult`` — immediate agent identity removal.
-- ``add_budget`` / ``AddBudgetResult`` / ``AddBudgetDenial`` — budget pool top-up
-  (``agent_broker.budget``).
+- ``create_broker`` / ``Broker`` — the factory and the object it returns, with ``register``,
+  ``request_permission``, ``report_outcome``, ``deregister`` and ``add_budget``.
+- ``BrokerOptions`` / ``BrokerHooks`` (plus ``CircuitBreakerOptions``, which ``BrokerOptions``
+  embeds) — configuration.
+- ``RegisterRootInput`` / ``RootAgent`` and ``RegisterChildInput`` / ``ChildAgent`` /
+  ``RegisterDenial`` / ``RegisterDenialReason`` — agent registration.
+- ``RequestPermissionInput`` / ``Admitted`` / ``Denied`` / ``DenialReason`` / ``QueueOptions`` —
+  admission, including queue mode.
+- ``ReportOutcomeInput`` / ``Resolved`` / ``ReportDenial`` / ``ReportDenialReason`` — resolving
+  a reservation.
+- ``DeregisterResult`` — agent removal.
+- ``AddBudgetResult`` / ``AddBudgetDenial`` / ``AddBudgetDenialReason`` — budget top-up.
+- ``BrokerError`` / ``BrokerConfigError`` / ``BrokerArgumentError`` — error classes.
+
+Anything not listed here (the lower-level functions such as ``request_permission`` or
+``register_root``, ``parse_config``, ``resolve_reservation``, ``sweep_expired_reservations``, and
+the ``keys`` module) is internal plumbing, as it is in the TypeScript package. It remains
+importable from its own submodule (e.g. ``agent_broker.admission``, ``agent_broker.keys``) for
+tests and advanced use, but is not part of the stable public API.
 """
 
 from __future__ import annotations
 
-from . import keys as keys
-from .admission import Admitted, Denied, RequestPermissionInput, request_permission
+from .admission import Admitted, DenialReason, Denied, RequestPermissionInput
 from .agents import (
     ChildAgent,
     DeregisterResult,
     RegisterChildInput,
     RegisterDenial,
+    RegisterDenialReason,
     RegisterRootInput,
-    RegisterRootResult,
     RootAgent,
-    deregister,
-    register_child,
-    register_root,
 )
 from .broker import Broker, create_broker
-from .budget import AddBudgetDenial, AddBudgetResult, add_budget
-from .cleanup import sweep_expired_reservations
-from .config import (
-    BrokerHooks,
-    BrokerOptions,
-    CircuitBreakerOptions,
-    ResolvedCircuitBreakerConfig,
-    ResolvedConfig,
-    parse_config,
-)
+from .budget import AddBudgetDenial, AddBudgetDenialReason, AddBudgetResult
+from .config import BrokerHooks, BrokerOptions, CircuitBreakerOptions
 from .errors import BrokerArgumentError, BrokerConfigError, BrokerError
-from .queue import QueueOptions, request_permission_queued
-from .resolution import (
-    ReportDenial,
-    ReportOutcomeInput,
-    ResolveOutcome,
-    ResolveParams,
-    ResolveSkipped,
-    Resolved,
-    report_outcome,
-    resolve_reservation,
-)
+from .queue import QueueOptions
+from .resolution import ReportDenial, ReportDenialReason, ReportOutcomeInput, Resolved
 
 __all__ = [
-    "Admitted",
     "AddBudgetDenial",
+    "AddBudgetDenialReason",
     "AddBudgetResult",
+    "Admitted",
     "Broker",
     "BrokerArgumentError",
     "BrokerConfigError",
@@ -87,35 +59,21 @@ __all__ = [
     "BrokerOptions",
     "ChildAgent",
     "CircuitBreakerOptions",
+    "DenialReason",
     "Denied",
     "DeregisterResult",
     "QueueOptions",
     "RegisterChildInput",
     "RegisterDenial",
+    "RegisterDenialReason",
     "RegisterRootInput",
-    "RegisterRootResult",
     "ReportDenial",
+    "ReportDenialReason",
     "ReportOutcomeInput",
-    "ResolveOutcome",
-    "ResolveParams",
-    "ResolveSkipped",
-    "Resolved",
-    "ResolvedCircuitBreakerConfig",
-    "ResolvedConfig",
     "RequestPermissionInput",
+    "Resolved",
     "RootAgent",
-    "add_budget",
     "create_broker",
-    "deregister",
-    "keys",
-    "parse_config",
-    "register_child",
-    "register_root",
-    "report_outcome",
-    "request_permission",
-    "request_permission_queued",
-    "resolve_reservation",
-    "sweep_expired_reservations",
 ]
 
 __version__ = "0.1.0"

@@ -26,7 +26,7 @@ Redis data model — the two can coordinate through one shared Redis instance (s
 [Interoperating with the TypeScript package](#interoperating-with-the-typescript-package)
 below). For the broader "why does this exist" discussion, see the
 [root README](../README.md#why-this-exists) and
-[`docs/agent-broker-architecture.md`](../docs/agent-broker-architecture.md).
+[`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
 
 ## Status
 
@@ -70,7 +70,7 @@ async def main():
     broker = create_broker(BrokerOptions(redis=client))
 
     # Register a root agent and fund its budget pool.
-    root = await broker.register_root(RegisterRootInput(budget_key="user-123", initial_budget=5000))
+    root = await broker.register(RegisterRootInput(budget_key="user-123", initial_budget=5000))
 
     # Before calling a downstream resource, ask permission.
     decision = await broker.request_permission(
@@ -81,7 +81,7 @@ async def main():
         # decision.reason: "unknown_agent" | "aborted" | "budget_exceeded"
         #                | "concurrency_exceeded" | "circuit_open" | "redis_unavailable" | "queue_timeout"
         # ("aborted" and "queue_timeout" only apply in queue mode — see "Queue mode" below.
-        #  "depth_exceeded" is a register_child() reason, not a request_permission() reason.)
+        #  "depth_exceeded" is a register() reason for child agents, not a request_permission() reason.)
         raise RuntimeError(f"denied: {decision.reason}")
 
     # Make your actual call however you normally would. agent-broker has no opinion about your
@@ -101,7 +101,7 @@ asyncio.run(main())
 ```python
 from agent_broker import RegisterChildInput, RegisterDenial
 
-child = await broker.register_child(RegisterChildInput(parent_id=root.agent_id))
+child = await broker.register(RegisterChildInput(parent_id=root.agent_id))
 # child.depth, child.root_id, child.budget_key are all broker-derived — never something you pass
 # in. See "Trust model" in the root README for why.
 
@@ -175,7 +175,7 @@ conservative option — identical semantics to the TypeScript package:
   guarantees during an outage.
 
 See [Failure behavior in the root README](../README.md#failure-behavior) and
-[`docs/agent-broker-architecture.md`](../docs/agent-broker-architecture.md#12-failure-model) for
+[`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md#12-failure-model) for
 the full breakdown of crash and timeout behavior, which this port follows exactly.
 
 ## Async usage, timeouts, and cancellation
@@ -313,7 +313,7 @@ at the repository root — they additionally require `npx` on `PATH` to run the 
 - [Root README](../README.md) — the TypeScript package, the project's "why this exists," trust
   model, and engineering highlights (all apply equally to this Python package, since both share
   the same design).
-- [`docs/agent-broker-architecture.md`](../docs/agent-broker-architecture.md) — full design
+- [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) — full design
   rationale, invariants, Redis data model, and failure model.
 - [`docs/adr/`](../docs/adr/) — architecture decision records.
 - [`docs/python-port/`](../docs/python-port/) — this port's own architecture decisions, feature

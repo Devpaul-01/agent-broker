@@ -1,18 +1,18 @@
 """The top-level public factory. Ports ``createBroker``/``Broker`` in ``src/broker.ts``.
 
 Ties every coordination module into one object, matching the TS package's single entry point.
-Python does not need the TS version's runtime duck-typing dispatch for ``register()``
-(``"parentId" in input`` to choose between root and child registration) — ``RegisterRootInput``
-and ``RegisterChildInput`` are distinct, non-overlapping dataclass types, so Python's own
-``isinstance``/structural typing already disambiguates them; ``Broker.register`` here still
-accepts either and dispatches, for the same ergonomic reason the TS version does (one method
-name for "register something," not two the caller has to remember to pick between), but without
-needing a type-narrowing trick that Python's type system doesn't need in the first place.
+
+Like the TS ``Broker``, ``Broker.register`` is the one method for registering an agent: it takes
+either a ``RegisterRootInput`` (returns a ``RootAgent``) or a ``RegisterChildInput`` (returns a
+``ChildAgent`` or ``RegisterDenial``) and dispatches on the input's type. The explicit
+``register_root`` / ``register_child`` methods are kept as thin, statically-typed aliases for
+callers who prefer not to rely on overload resolution.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import overload
 
 from .admission import Admitted, Denied, RequestPermissionInput, request_permission
 from .agents import (
@@ -52,12 +52,27 @@ class Broker:
 
     _config: ResolvedConfig
 
+    @overload
+    async def register(self, input: RegisterRootInput) -> RootAgent: ...
+
+    @overload
+    async def register(self, input: RegisterChildInput) -> ChildAgent | RegisterDenial: ...
+
+    async def register(
+        self, input: RegisterRootInput | RegisterChildInput
+    ) -> RootAgent | ChildAgent | RegisterDenial:
+        """Register a root agent (``RegisterRootInput``) or a delegated child agent
+        (``RegisterChildInput``), mirroring the TS ``broker.register()``.
+        """
+        if isinstance(input, RegisterChildInput):
+            return await _register_child(self._config, input)
+        return (await _register_root(self._config, input)).agent
+
     async def register_root(self, input: RegisterRootInput) -> RootAgent:
-        result = await _register_root(self._config, input)
-        return result.agent
+        return await self.register(input)
 
     async def register_child(self, input: RegisterChildInput) -> ChildAgent | RegisterDenial:
-        return await _register_child(self._config, input)
+        return await self.register(input)
 
     async def request_permission(
         self,

@@ -15,3 +15,7 @@ Thumbs.db
 
 # Logs (shared, harmless to keep at root too)
 *.log
+
+# Python
+__pycache__/
+*.pyc

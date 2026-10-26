@@ -1,8 +1,19 @@
-name: CI
+name: TypeScript
 
 on:
   push:
+    paths:
+      - "typescript/**"
+      - ".github/workflows/typescript.yml"
   pull_request:
+    paths:
+      - "typescript/**"
+      - ".github/workflows/typescript.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: typescript-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -27,6 +38,8 @@ jobs:
           cache: npm
           cache-dependency-path: typescript/package-lock.json
       - run: npm ci
+        working-directory: typescript
+      - run: npm run typecheck
         working-directory: typescript
       - run: npm test
         working-directory: typescript

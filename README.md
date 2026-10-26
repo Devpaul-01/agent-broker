@@ -8,6 +8,8 @@
 
 It does **not** make the call for you. It is a pure permission gate: you ask before, you report after, you stay in full control of how the actual request happens.
 
+> **Coming next:** a LangGraph-native integration is currently in development — see [Project status and roadmap](#project-status-and-roadmap).
+
 ```
 your process → broker.requestPermission(...) → { allowed: true, reservationId }
 your process → (you make the real call yourself, however you want)
@@ -28,7 +30,7 @@ Each of these looks fine from inside any single process and only becomes a probl
 
 ## What this is not
 
-To save you a wrong assumption: this is **not** an LLM gateway in the sense of Portkey, LiteLLM, or Cloudflare AI Gateway. Those sit *in* the request path — they route, cache, and proxy the actual call to the provider. `agent-broker` never touches the provider at all. It solves a narrower, different problem: cross-process safety coordination, not request routing. See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) for the full boundary discussion, and [`docs/positioning.md`](docs/positioning.md) for how this fits (and doesn't yet fit) into agent-framework workflows.
+To save you a wrong assumption: this is **not** an LLM gateway in the sense of Portkey, LiteLLM, or Cloudflare AI Gateway. Those sit *in* the request path — they route, cache, and proxy the actual call to the provider. `agent-broker` never touches the provider at all. It solves a narrower, different problem: cross-process safety coordination, not request routing. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full boundary discussion, and [`docs/positioning.md`](docs/positioning.md) for how this fits (and doesn't yet fit) into agent-framework workflows.
 
 It is also not a security boundary against a malicious caller. It protects against *accidental* and *architectural* bypass — not against a process owner willing to lie to it. See [Trust model](#trust-model) below.
 
@@ -121,7 +123,7 @@ await broker.reportOutcome({
 | **Reservation** | A hold placed on `estimatedCost` at admission time, reconciled against `actualCost` once you report back. |
 | **Circuit breaker** | Shared, cross-process failure tracking per `target`. Trips to `open` once recent `retryable: true` failures cross a threshold; recovers via a small trickle of probe calls. |
 
-Full mechanics, invariants, and the reasoning behind each of these are in [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md).
+Full mechanics, invariants, and the reasoning behind each of these are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
@@ -160,7 +162,7 @@ If Redis is unreachable, `onRedisUnavailable` decides what happens, and it defau
 - **`'deny'`** (default): calls are denied with `reason: 'redis_unavailable'`. The one moment coordination can't function is exactly the moment you don't want to silently lose the guarantees it provides.
 - **`'allow'`**: calls are admitted without a reservation (`degraded: true`, `reservationId: null`). Pick this only if raw availability matters more than the coordination guarantees during an outage — this library will not make that tradeoff silently on your behalf.
 
-See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md#12-failure-model) for the full breakdown of crash and timeout behavior.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#12-failure-model) for the full breakdown of crash and timeout behavior.
 
 ## Queue mode
 
@@ -191,7 +193,7 @@ This is an in-process library. The process that imports it fundamentally control
 - A caller that misreports `retryable`, `actualCost`, or `success` on `reportOutcome` — the broker never observes your actual downstream call or response, so it has no independent way to verify what you tell it.
 - A caller that never calls `reportOutcome` at all — bounded by reservation TTL, not eliminated.
 
-If you need protection against a genuinely adversarial, non-cooperating caller, you need a boundary this library doesn't provide (e.g., a service-mode deployment with its own auth). See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md#17-security-and-trust-boundaries).
+If you need protection against a genuinely adversarial, non-cooperating caller, you need a boundary this library doesn't provide (e.g., a service-mode deployment with its own auth). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#17-security-and-trust-boundaries).
 
 ---
 
@@ -226,7 +228,7 @@ with:
   orphan agent and/or orphan budget pool) and why it's harmless, rather than glossing over it —
   `typescript/src/agents/register.ts`.
 
-See [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) for the full request
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full request
 lifecycle, Redis data model, and failure model — including diagrams of each of the mechanisms
 above.
 
@@ -275,13 +277,15 @@ for the verified milestone patches that built it.
 
 ## Project status and roadmap
 
-`agent-broker` is published and live on [npm](https://www.npmjs.com/package/agent-broker) — `npm install agent-broker ioredis` works today.
+`agent-broker` is published and live on [npm](https://www.npmjs.com/package/agent-broker) — `npm install agent-broker ioredis` works today. The Python package is feature-complete against the same API but not yet published to PyPI.
 
-This library solves cross-process budget, depth, and retry-storm coordination, and that core is tested under real multi-process concurrency (see [`docs/agent-broker-architecture.md#14-testing-architecture`](docs/agent-broker-architecture.md#14-testing-architecture)). It does **not** yet have agent-aware call metadata, framework-protocol adapters (MCP or similar), or a built-in observability surface beyond the four hooks above — these are intentional, not finished, and the plan for closing that gap honestly (including why it's a layer on top rather than a rewrite) is in [`docs/positioning.md`](docs/positioning.md). If you're evaluating this for an agent-framework integration today, read that document first.
+**In progress: LangGraph integration.** I'm currently building a version that integrates cleanly with the [LangGraph](https://www.langchain.com/langgraph) framework, so that a graph's nodes and sub-agents can be gated by the broker without hand-wiring `requestPermission` / `reportOutcome` around every call. This is work in progress and not yet released — nothing in the current packages is LangGraph-specific, and the API for it isn't final. Until it lands, you can use the broker alongside LangGraph the same way you would with any other framework: ask before the call, report after. Design notes live in [`docs/positioning.md`](docs/positioning.md).
+
+This library solves cross-process budget, depth, and retry-storm coordination, and that core is tested under real multi-process concurrency (see [`docs/ARCHITECTURE.md#14-testing-architecture`](docs/ARCHITECTURE.md#14-testing-architecture)). It does **not** yet have agent-aware call metadata, framework-protocol adapters (MCP or similar), or a built-in observability surface beyond the four hooks above — these are intentional, not finished, and the plan for closing that gap honestly (including why it's a layer on top rather than a rewrite) is in [`docs/positioning.md`](docs/positioning.md). If you're evaluating this for an agent-framework integration today, read that document first.
 
 ## Documentation
 
-- [`docs/agent-broker-architecture.md`](docs/agent-broker-architecture.md) — full design rationale, invariants, Redis data model, failure model, and the ADR log
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — full design rationale, invariants, Redis data model, failure model, and the ADR log
 - [`docs/positioning.md`](docs/positioning.md) — honest take on what this is, what it isn't yet, and the intended path to agent-framework integration
 - [`docs/adr/`](docs/adr/) — architecture decision records, including rejected alternatives
 - [`python/README.md`](python/README.md) — Python package documentation, installation, and usage (see [Python](#python) above)

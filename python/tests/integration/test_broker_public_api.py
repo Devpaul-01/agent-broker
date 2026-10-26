@@ -98,6 +98,23 @@ async def test_report_outcome_feeds_the_circuit_breaker_unlike_cleanup(redis_cli
     assert await redis_client.get(keys.circuit_state("feeds-circuit")) == "open"
 
 
+# --- register (root/child dispatch) -----------------------------------------------------------
+
+
+async def test_register_dispatches_root_and_child_inputs(redis_client: redis_asyncio.Redis) -> None:
+    """``Broker.register`` mirrors the TS ``broker.register()``: one method, dispatching on input type."""
+    from agent_broker.agents import ChildAgent, RootAgent
+
+    broker = create_broker(BrokerOptions(redis=redis_client))
+    root = await broker.register(RegisterRootInput(budget_key=f"reg-{random.random()}", initial_budget=100))
+    assert isinstance(root, RootAgent)
+
+    child = await broker.register(RegisterChildInput(parent_id=root.agent_id))
+    assert isinstance(child, ChildAgent)
+    assert child.root_id == root.agent_id
+    assert child.depth == root.depth + 1
+
+
 # --- queue mode -------------------------------------------------------------------------------
 
 

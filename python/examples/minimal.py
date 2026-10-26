@@ -28,7 +28,7 @@ async def main() -> None:
     # A root agent owns (or shares) a budget pool. budget_key defaults to the agent's own id if
     # omitted, which makes it private by default - pass the same budget_key across unrelated
     # root agents only when you actually want them to share one spending pool.
-    root = await broker.register_root(RegisterRootInput(budget_key="example-user", initial_budget=1000))
+    root = await broker.register(RegisterRootInput(budget_key="example-user", initial_budget=1000))
     print(f"registered root agent {root.agent_id}, budget pool {root.budget_key!r}")
 
     decision = await broker.request_permission(

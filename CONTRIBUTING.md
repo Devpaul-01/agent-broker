@@ -36,7 +36,7 @@ run `npm run redis:up` first, or point `TEST_REDIS_URL` at an existing instance.
 - If you touched `typescript/src/`, make sure `npm run build` still produces a clean `dist/` and
   `npm run typecheck` is clean — these are both enforced in CI but worth checking locally first.
 - If your change affects documented behavior (anything in README.md or
-  `docs/agent-broker-architecture.md`), update the relevant doc in the same PR. Treat the
+  `docs/ARCHITECTURE.md`), update the relevant doc in the same PR. Treat the
   implementation as the source of truth and the docs as something that must track it — see
   `docs/adr/` for the convention this project uses to record *why* a decision was made, not just
   what it is.
@@ -51,15 +51,37 @@ run `npm run redis:up` first, or point `TEST_REDIS_URL` at an existing instance.
 
 ## What CI checks
 
-`.github/workflows/ci.yml` runs on every push and pull request:
+CI is split into one workflow per concern under `.github/workflows/`. Each runs on pushes and pull
+requests that touch the paths it cares about (and can also be started manually), so a
+TypeScript-only change doesn't wait on the Python matrix and vice versa.
 
-1. **`test`** — `npm ci`, full test suite (`npm test`) against a real Redis service container,
-   run with `typescript/` as the working directory.
-2. **`pack-and-install`** (depends on `test` passing) — builds, runs `npm pack`, installs the
-   actual packed tarball into an independent consumer project, and runs a real smoke test
-   against it, across both supported `ioredis` majors (`^5` and `^6`). This is the test that
-   verifies the *published artifact* works, not just the source tree — see
-   [RELEASE.md](RELEASE.md) for why that distinction matters.
+1. **`typescript.yml`** — runs on changes under `typescript/`.
+   - **`test`**: `npm ci`, `npm run typecheck`, then the full suite (`npm test`) against a real
+     Redis service container, with `typescript/` as the working directory.
+   - **`pack-and-install`** (depends on `test`): builds, runs `npm pack`, installs the actual
+     packed tarball into an independent consumer project, and runs a real smoke test against it,
+     across both supported `ioredis` majors (`^5` and `^6`). This verifies the *published
+     artifact* works, not just the source tree — see [RELEASE.md](RELEASE.md).
+2. **`python.yml`** — runs on changes under `python/` or `typescript/src/` (the Python unit tests
+   diff its Lua scripts and public API against the TypeScript source).
+   - **`test`**: Python 3.10–3.13 matrix; `mypy --strict`, unit tests, then integration tests
+     against a real Redis service container.
+   - **`build`** (depends on `test`): builds the sdist and wheel, installs the wheel into a clean
+     virtualenv, and imports it.
+3. **`cross-language.yml`** — runs on changes under `typescript/`, `python/`, or
+   `test/cross-language/`. Installs both toolchains and runs the cross-language suite, which
+   proves a TypeScript process and a Python process coordinate through one shared Redis.
+
+Because each workflow is path-filtered, don't mark these as *required* status checks in branch
+protection without also adding a catch-all job — a skipped workflow never reports a status.
+
+To run the Python and cross-language checks locally:
+
+```bash
+cd python && pip install -e ".[dev]"
+mypy --strict src/agent_broker && pytest tests/unit tests/integration
+cd .. && pytest test/cross-language/ -v   # also needs `npm ci` in typescript/ and Redis running
+```
 
 ## Architecture decision records
 

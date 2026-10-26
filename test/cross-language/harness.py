@@ -58,6 +58,14 @@ class WorkerHandle:
         # that the TS package lives in its own subfolder, mirroring python/'s own subfolder.
         worker_cwd = _TYPESCRIPT_DIR if kind == "typescript" else _REPO_ROOT
 
+        env = {**os.environ}
+        if kind == "typescript":
+            # ts_worker.ts lives in test/cross-language/, outside typescript/, so Node's normal
+            # upward node_modules lookup never reaches typescript/node_modules and `import
+            # "ioredis"` fails. Point module resolution at it explicitly.
+            node_modules = str(_TYPESCRIPT_DIR / "node_modules")
+            env["NODE_PATH"] = os.pathsep.join(filter(None, [node_modules, env.get("NODE_PATH")]))
+
         self._proc = subprocess.Popen(
             cmd,
             cwd=str(worker_cwd),
@@ -66,7 +74,7 @@ class WorkerHandle:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,  # line-buffered
-            env={**os.environ},
+            env=env,
         )
         self._ready_checked = False
 

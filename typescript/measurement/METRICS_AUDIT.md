@@ -41,7 +41,7 @@ This framing matters directly for every metric below: "endpoint latency," "reque
 | Mock usage | None found in `src/`. The only "mock-like" test infrastructure is the IPC worker harness, which is real processes, not mocks. |
 | Fault injection | Real (not mocked): `test/integration/redis-unavailable.test.ts` connects to `redis://127.0.0.1:1` (a genuinely unreachable port) to trigger `MaxRetriesPerRequestError` / `ECONNREFUSED` paths. |
 | Performance/benchmark code | **None exists in the repository.** No `bench/` directory, no load-test script, no latency measurement code anywhere. This is the gap Part Two must fill. |
-| Documentation self-awareness | `docs/agent-broker-architecture.md` already states two real limitations in writing: the library is "not designed for gating very high-frequency, low-latency operations (sub-10ms)," and "a single extremely popular target or budgetKey ... serializes on Redis's single-threaded command execution." These are falsifiable, specific claims — good benchmark candidates, and also a sign the author already understands the system's performance envelope rather than being naive about it. |
+| Documentation self-awareness | `docs/ARCHITECTURE.md` already states two real limitations in writing: the library is "not designed for gating very high-frequency, low-latency operations (sub-10ms)," and "a single extremely popular target or budgetKey ... serializes on Redis's single-threaded command execution." These are falsifiable, specific claims — good benchmark candidates, and also a sign the author already understands the system's performance envelope rather than being naive about it. |
 
 ### Capability classification (per Section 3 of the brief)
 
