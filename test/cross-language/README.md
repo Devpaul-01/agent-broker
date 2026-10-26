@@ -2,9 +2,9 @@
 
 Proves the TypeScript and Python implementations of Agent Broker actually interoperate through
 the same Redis instance — not just that each language's own test suite passes independently.
-See `docs/python-port/IMPLEMENTATION_PLAN.md` (Milestone 5) and
-`docs/python-port/ARCHITECTURE.md` for why this directory exists at the repository root rather
-than inside either language's own test tree.
+See `docs/ARCHITECTURE.md` (§14 and §23) for how this fits into the overall design. It lives at
+the repository root, rather than inside either language's own test tree, because it exercises
+both.
 
 ## How it works
 
@@ -31,9 +31,9 @@ than inside either language's own test tree.
 ## Prerequisites
 
 - A reachable Redis at `redis://localhost:6379/15` (override with `TEST_REDIS_URL`) — same
-  requirement, same database, as every other integration test in this repository. See
-  `docs/python-port/BASELINE.md` for how this was provisioned in the sandbox this port was
-  built in.
+  requirement, same database, as every other integration test in this repository. These tests
+  **flush that database**, so don't point them at a Redis whose data you need. A throwaway
+  instance: `docker run -d -p 6379:6379 redis:7-alpine`.
 - `npx` on `PATH` (to run `ts_worker.ts` via `tsx`, unbuilt — same as every other TS integration
   test in this repository).
 - The Python package installed (`pip install -e python/`, or just having `python/src` on

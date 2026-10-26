@@ -1,18 +1,26 @@
-# agent-broker — Architecture & Design Document
+# agent-broker — Architecture
 
-## Purpose of this document
+This is the single architecture document for Agent Broker. It describes the system as it ships
+today in both language implementations — [TypeScript](../typescript/) (published on npm) and
+[Python](../python/) (in this repository, **not yet published to PyPI**) — and records the
+reasoning behind the non-obvious decisions, including rejected alternatives. Where the shipped
+system diverged from the original design, the divergence is called out in place with a link to
+the ADR that records why.
 
-This document was originally written as a complete handoff for an implementation session (human or AI coding agent) with **no prior context** about this project — it captured not just the intended design, but the reasoning that produced it, including rejected alternatives, because several of these decisions are non-obvious and an implementer who doesn't understand *why* a choice was made is at risk of "fixing" it incorrectly.
+**Where to start:** Section 4 (system boundaries), Section 5 (request lifecycle), Section 11
+(atomicity — the core of the design), Section 12 (failure model) and Section 23 (how the
+TypeScript and Python implementations relate). Section 20 (Known Limitations) and the ADR log
+(Section 21) document tradeoffs that are intentional, not oversights.
 
-The library has since been built and tested, and this document has been **updated to reflect the system as it actually ships**, not just as it was originally planned. Everywhere the implementation diverged from the original design — a simplified circuit-breaker recovery model, a corrected refund-signaling mechanism, a key-naming scheme hardened against collision, and a few others — that divergence is called out explicitly in place, with a link to the ADR that records why. A short-lived, separate `architecture.md` summary document existed briefly alongside this one; its content has been fully folded back in here, and it has been removed so there is exactly one architecture document, not two that can drift apart again.
-
-Read this document in full before making non-trivial changes. Section 20 (Known Limitations) and the ADR log (Section 21) are especially important — they document tradeoffs that are intentional, not oversights.
+Unless a section says otherwise, API examples use the TypeScript names (`requestPermission`,
+`budgetKey`); the Python package exposes the same operations in `snake_case`
+(`request_permission`, `budget_key`). Section 23 lists where the two genuinely differ.
 
 ---
 
 ## 1. What This Project Is
 
-`agent-broker` is an **in-process TypeScript library** that coordinates behavior across multiple independent, concurrently-running processes (agent instances) that each make calls to a shared downstream resource (an LLM provider, or in principle any external resource with a cost and a failure mode).
+`agent-broker` is an **in-process library** (TypeScript and Python implementations, sharing one Redis protocol) that coordinates behavior across multiple independent, concurrently-running processes (agent instances) that each make calls to a shared downstream resource (an LLM provider, or in principle any external resource with a cost and a failure mode).
 
 ### The core problem it solves
 
@@ -29,8 +37,8 @@ When multiple independent processes each implement their own retry logic, budget
 - **Not an agent framework.** It has no concept of prompts, reasoning, planning, or what an agent is "trying to do." It knows nothing about task logic.
 - **Not a general-purpose rate limiter**, though one of its three mechanisms (circuit breaking) is rate-limiter-*shaped*. The other two mechanisms (tree-based depth/delegation tracking, reservation-based cost accounting with estimate/actual reconciliation) are not reducible to rate limiting at all.
 - **Not an LLM SDK.** It has no concept of prompts, models-as-a-first-class-object, streaming ergonomics, or provider-specific request/response shapes.
-- **Not a call executor.** After significant design iteration (see ADR-9), the broker was deliberately pivoted to never execute downstream calls itself. It only grants/denies permission and records caller-reported outcomes.
-- **Not a security boundary** in the adversarial sense. It prevents *accidental* and *architectural* bypasses (a caller can't accidentally spoof its own depth), but it explicitly does not defend against a fully malicious process owner who is willing to misreport outcomes. See Section 18.
+- **Not a call executor.** After significant design iteration (see [ADR-0004](adr/0004-no-provider-abstraction.md)), the broker was deliberately pivoted to never execute downstream calls itself. It only grants/denies permission and records caller-reported outcomes.
+- **Not a security boundary** in the adversarial sense. It prevents *accidental* and *architectural* bypasses (a caller can't accidentally spoof its own depth), but it explicitly does not defend against a fully malicious process owner who is willing to misreport outcomes. See Section 17.
 
 ---
 
@@ -54,19 +62,19 @@ Agents may delegate to sub-agents, which may recursively delegate further. The b
 
 | Decision | Choice | Why |
 |---|---|---|
-| Language | TypeScript | Matches the developer's existing strength; the problem is I/O-bound coordination logic, not something requiring a different runtime. A later Go port is a plausible *second* project once the design is proven, not a v1 concern (see ADR list). |
-| Runtime model | In-process library, not a standalone HTTP service | See ADR-2 rationale below — this was a deliberate, reasoned choice, not a default. |
+| Language | TypeScript (original) and Python (a genuine port, not a wrapper) | The problem is I/O-bound coordination logic, so neither needs anything beyond a Redis client. Both implementations speak the same Redis protocol and run the same Lua scripts, so processes written in either language can share state (Section 23). |
+| Runtime model | In-process library, not a standalone HTTP service | See the rationale below — this was a deliberate, reasoned choice, not a default. |
 | Shared coordination substrate | Redis | The one genuinely non-negotiable infrastructure choice — the whole point is state shared across independent processes, and Redis is what any number of separate processes can all connect to. |
-| Redis connection ownership | Supplied by the consuming application at `createBroker()` time | The library never manages its own Redis connection or reads environment variables directly (ADR-3). This is also what gives isolation between unrelated systems "for free" — two apps pointed at different Redis instances share nothing. |
-| Downstream execution | **Not owned by the broker at all** (post-pivot) | See ADR-9. The broker is a pure permission gate. |
+| Redis connection ownership | Supplied by the consuming application at `createBroker()` time | The library never manages its own Redis connection or reads environment variables directly ([ADR-0006](adr/0006-no-owned-redis-connection.md)). This is also what gives isolation between unrelated systems "for free" — two apps pointed at different Redis instances share nothing. |
+| Downstream execution | **Not owned by the broker at all** (post-pivot) | See [ADR-0004](adr/0004-no-provider-abstraction.md). The broker is a pure permission gate. |
 
 ### Why an in-process library, not an HTTP service
 
 This was explicitly discussed and decided deliberately, not defaulted into:
 
-- The developer had never designed a library's public API surface before (only HTTP endpoints) and specifically wanted to close that gap.
-- The core coordination claim ("state shared across independent processes") is satisfied by the shared Redis instance underneath, **not** by the broker being a standalone service. Two separate Node processes, each importing the library, each pointed at the same Redis, get real cross-process coordination — the shared state lives in Redis, not in any process's memory.
-- What a standalone HTTP service would add, that a library does not provide: the ability to enforce policy against a caller that doesn't want to comply. Since this project is about proving a coordination *design*, not defending against hostile callers, this tradeoff was accepted deliberately (see Section 18 for the full trust-boundary discussion).
+- The goal was to design a library's public API surface (ergonomics, error model, immutability) rather than another HTTP endpoint.
+- The core coordination claim ("state shared across independent processes") is satisfied by the shared Redis instance underneath, **not** by the broker being a standalone service. Two separate processes, each importing the library, each pointed at the same Redis, get real cross-process coordination — the shared state lives in Redis, not in any process's memory.
+- What a standalone HTTP service would add, that a library does not provide: the ability to enforce policy against a caller that doesn't want to comply. Since this project is about proving a coordination *design*, not defending against hostile callers, this tradeoff was accepted deliberately (see Section 17 for the full trust-boundary discussion).
 
 ---
 
@@ -104,7 +112,7 @@ Two things this diagram is deliberately explicit about, because they're easy to 
 glance: the broker never sits between the caller and the downstream target — the dashed lines are
 the caller's own direct calls, made entirely outside the broker. And every process's broker
 instance talks to the *same* Redis — that shared state, not the library code, is what makes
-coordination across processes possible at all (Section 18 covers what is and isn't shared this
+coordination across processes possible at all (Section 17 covers what is and isn't shared this
 way in more depth).
 
 ### What "agent" means to the broker
@@ -178,12 +186,13 @@ at all; everything it "knows" about that call's outcome comes second-hand from `
 ### Successful call
 
 ```
-caller → broker.requestPermission({ agentId, target, estimatedCost, ttl, mode, queueTimeout? })
+caller → broker.requestPermission({ agentId, target, estimatedCost, ttl? }, queueOptions?)
   → broker (single atomic Lua script) checks, in one combined operation:
-       - does the agent exist and is its registration valid?
-       - is the concurrency limit for this target+budgetKey currently exceeded?
+       - does the agent exist?
+       - circuit-breaker state for this target: open (only a probeRate fraction is let
+         through, as recovery probes) or closed? (see Section 9)
        - is there enough budget remaining in this budgetKey's pool for estimatedCost?
-       - what is the circuit-breaker state for this target — closed / open / recovering?
+       - is the concurrency limit for this (target, budgetKey) pair already reached?
   → if all checks pass: broker atomically reserves estimatedCost, creates a reservation
     record with the caller-supplied TTL, increments the concurrency counter
   → broker returns { allowed: true, reservationId }
@@ -191,18 +200,18 @@ caller → broker.requestPermission({ agentId, target, estimatedCost, ttl, mode,
 caller → (entirely outside the broker's awareness) performs its own downstream call,
           using whatever mechanism/SDK/HTTP client it wants
 
-caller → broker.reportOutcome({ reservationId, success, actualCost?, costUnknown?, retryable? })
+caller → broker.reportOutcome({ reservationId, success, actualCost?, retryable? })
   → broker reconciles: releases the reservation, adjusts the budget pool (refunds the
     difference between estimated and actual, or accepts a bounded overrun if actual
-    exceeded estimated — see Section 6), decrements the concurrency counter, and (if
+    exceeded estimated — see Section 7), decrements the concurrency counter, and (if
     success: false) updates circuit-breaker state if retryable: true
 ```
 
-**Critical honesty point:** the broker's knowledge of "did this call succeed" is entirely second-hand — it never sees a response, status code, or real usage data directly. It only knows what `reportOutcome` tells it. This is the direct, accepted cost of the pure-gate pivot (see ADR-9 and Section 18).
+**Critical honesty point:** the broker's knowledge of "did this call succeed" is entirely second-hand — it never sees a response, status code, or real usage data directly. It only knows what `reportOutcome` tells it. This is the direct, accepted cost of the pure-gate pivot (see [ADR-0004](adr/0004-no-provider-abstraction.md) and Section 17).
 
 ### Retry / downstream failure path
 
-The broker does **not** own a retry loop. Each retry is simply another `requestPermission` call from the caller. The broker's role is to make each successive `requestPermission` call aware of aggregate recent failure state for that target (via the circuit-breaker mechanism, Section 7), so a caller's Nth attempt can be denied or delayed based on what *every* caller has recently experienced against that target — not just this caller's own count.
+The broker does **not** own a retry loop. Each retry is simply another `requestPermission` call from the caller. The broker's role is to make each successive `requestPermission` call aware of aggregate recent failure state for that target (via the circuit-breaker mechanism, Section 9), so a caller's Nth attempt can be denied or delayed based on what *every* caller has recently experienced against that target — not just this caller's own count.
 
 ### Budget failure path
 
@@ -232,7 +241,7 @@ Depth validation happens at **registration** time, not call time — a rejected 
 
 ## 6. Agent / Delegation Model — Trust and Identity
 
-This is one of the most important sections. The entire value of centralized depth/budget enforcement depends on the broker having **authoritative state that cannot be spoofed by a cooperating-but-careless or cooperating-but-dishonest caller** (with the explicit exception noted in Section 18 — see also the "deliberate evasion" limitation in Section 22).
+This is one of the most important sections. The entire value of centralized depth/budget enforcement depends on the broker having **authoritative state that cannot be spoofed by a cooperating-but-careless or cooperating-but-dishonest caller** (with the explicit exception noted in Section 17 — see also the "deliberate evasion" limitation in Section 22).
 
 ### The general trust pattern used throughout this design
 
@@ -244,7 +253,7 @@ Broker-issued at registration (e.g. a UUID). Never caller-chosen. If callers cou
 
 ### Depth / parent / root
 
-Computed once at registration, from the broker's own lookup of the parent's stored state, and **permanently immutable** thereafter (ADR-20). There is no update path for these fields — this is deliberate, not a missing feature. Allowing depth to be mutated post-registration would create a direct bypass of the entire protection depth is meant to provide.
+Computed once at registration, from the broker's own lookup of the parent's stored state, and **permanently immutable** thereafter ([ADR-0024](adr/0024-immutable-identity-fields.md)). There is no update path for these fields — this is deliberate, not a missing feature. Allowing depth to be mutated post-registration would create a direct bypass of the entire protection depth is meant to provide.
 
 ### Budget key inheritance
 
@@ -273,7 +282,7 @@ A related question that came up during design: if the same user makes a second r
 
 - `addBudget(budgetKey, amount)` — **additive only.** Supported because it's strictly safe: it cannot retroactively invalidate any already-granted decision.
 - **No arbitrary "set budget to X" operation exists**, and none should be added. Setting an arbitrary value could erase a legitimately-incurred deficit from reconciliation overrun (see Section 7), effectively letting a caller cheat the accounting.
-- Broker-level configuration (`maxDepth`, circuit breaker thresholds, etc.) is **immutable for the lifetime of a given broker instance** (ADR-19). If different limits are needed, create a new broker instance. This avoids the unsolvable question of "what happens to already-registered agents that become non-compliant if limits change mid-flight."
+- Broker-level configuration (`maxDepth`, circuit breaker thresholds, etc.) is **immutable for the lifetime of a given broker instance** ([ADR-0007](adr/0007-immutable-broker-config.md)). If different limits are needed, create a new broker instance. This avoids the unsolvable question of "what happens to already-registered agents that become non-compliant if limits change mid-flight."
 
 ---
 
@@ -306,7 +315,7 @@ reserve(estimatedCost) → call happens (outside the broker) → reportOutcome(a
 
 ### Unknown cost handling
 
-A successful call where the caller genuinely cannot determine real usage (e.g., the provider returned no usage metadata) is handled by simply omitting `actualCost` from `reportOutcome({ success: true })` — there is no separate `costUnknown` input field. The broker's fallback: release the *originally reserved estimated* cost back as the settled cost (best available information), and report `costUnknown: true` in its response, rather than silently defaulting to an arbitrary number like `1`, which was explicitly considered and rejected as dangerous — a plausible-looking wrong default would silently corrupt budget accounting in a way that's invisible until numbers stop adding up much later. See [ADR-0020](adr/0020-actualcost-and-costunknown.md) for why the implementation infers this from the absence of `actualCost` rather than a separate explicit flag, which was the original design here.
+A successful call where the caller genuinely cannot determine real usage (e.g., the provider returned no usage metadata) is handled by simply omitting `actualCost` from `reportOutcome({ success: true })` — there is no separate `costUnknown` input field. The broker's fallback: keep the *originally reserved estimate* as the settled cost, i.e. refund nothing (best available information; a failed call with no `actualCost` is instead refunded in full), and report `costUnknown: true` in its response, rather than silently defaulting to an arbitrary number like `1`, which was explicitly considered and rejected as dangerous — a plausible-looking wrong default would silently corrupt budget accounting in a way that's invisible until numbers stop adding up much later. See [ADR-0020](adr/0020-actualcost-and-costunknown.md) for why the implementation infers this from the absence of `actualCost` rather than a separate explicit flag, which was the original design here.
 
 ### `budgetKey` scope, restated for this section
 
@@ -319,7 +328,7 @@ Budget is scoped **per broker instance is not the granularity** — it is scoped
 A separate mechanism from both depth and budget — this was an explicit correction made during design after an initial (incorrect) assumption that depth already covered concurrent-call volume. **It does not.** Depth constrains tree *shape* (how many delegation levels deep); it says nothing about how many calls are happening *simultaneously*. A tree capped at depth 3 could still have thousands of agents at depth 1 all calling at once — nothing about depth prevents that.
 
 - Tracked per `target` + `budgetKey` combination (both dimensions may need independent limits — a global cap on a popular target, and/or a per-user cap).
-- Enforced as an atomic increment/decrement, folded into the **same combined admission script** as the budget check (see Section 10) — not a separate round trip, to avoid reopening the exact race the design exists to close.
+- Enforced as an atomic increment/decrement, folded into the **same combined admission script** as the budget check (see Section 11) — not a separate round trip, to avoid reopening the exact race the design exists to close.
 - **`mode: 'deny' | 'queue'`**, caller-specified per call. `'deny'` (the default) rejects immediately if the limit is currently hit. `'queue'` holds the request until a slot frees or `queueTimeout` elapses. `'deny'` is the safer, simpler default; `'queue'` is an explicit opt-in for callers who specifically want to wait rather than handle the denial themselves.
 
 ---
@@ -340,7 +349,7 @@ The broker never sees a downstream response. It only sees `requestPermission` ca
 
 **This distinction is load-bearing and must not be skipped:** if non-retryable failures (e.g. a caller bug sending malformed requests) were folded into the same failure counter as genuine transient errors, a buggy-but-unrelated caller could wrongly trip the circuit breaker for a target that is actually perfectly healthy, denying every legitimate caller. Only `retryable: true` outcomes feed the circuit-breaker sorted set. Non-retryable failures are still reported (for the caller's own budget/concurrency reconciliation) but must not influence shared circuit state.
 
-**Trust caveat, stated explicitly:** the broker has no independent way to verify a caller's `retryable` claim — it never sees the actual downstream error. A caller could misreport this, by bug or bad faith. This is an accepted, named limitation (see Section 18), not a gap that was overlooked.
+**Trust caveat, stated explicitly:** the broker has no independent way to verify a caller's `retryable` claim — it never sees the actual downstream error. A caller could misreport this, by bug or bad faith. This is an accepted, named limitation (see Section 17), not a gap that was overlooked.
 
 ### Circuit breaker: two states as shipped, two thresholds
 
@@ -355,7 +364,7 @@ This is a deliberately standard, well-understood pattern (not a novel invention)
 
 ### A race that must not be overlooked
 
-The "1-in-N probe" decision must be part of the same atomic operation as everything else — if implemented as a separate read-then-decide step ("read current probe count, if under threshold allow"), concurrent callers could all read the same pre-increment state and all be simultaneously admitted as probes, breaking the "only a trickle" guarantee at exactly the moment the target is most fragile. This must be folded into the single combined Lua script (Section 10), not a separate operation.
+The "1-in-N probe" decision must be part of the same atomic operation as everything else — if implemented as a separate read-then-decide step ("read current probe count, if under threshold allow"), concurrent callers could all read the same pre-increment state and all be simultaneously admitted as probes, breaking the "only a trickle" guarantee at exactly the moment the target is most fragile. This must be folded into the single combined Lua script (Section 11), not a separate operation.
 
 ---
 
@@ -466,6 +475,37 @@ why an originally-planned third `recovering` state (requiring several consecutiv
 successes) was simplified away during implementation. Crossing `softThreshold` (below
 `hardThreshold`) doesn't change state at all; it only attaches a `retryAfter` backpressure hint to
 an otherwise-still-`allowed: true` response, visible in Section 9 above.
+
+### Diagram E — Failure handling at a glance
+
+Every failure path below is resolved either inside one atomic Lua script or by a defined fallback
+— none relies on a background process. This mirrors `requestPermission`, `reportOutcome` and the
+lazy sweep (`admission/cleanup.ts`, `cleanup.py`).
+
+```mermaid
+flowchart TD
+    A["requestPermission(...)"] --> E{"Redis reachable?"}
+    E -- "no, onRedisUnavailable = deny (default)" --> D1["Denied: redis_unavailable"]
+    E -- "no, onRedisUnavailable = allow" --> D2["Admitted: degraded = true,\nreservationId = null\n(no budget, concurrency or circuit checks)"]
+    E -- yes --> S["Lazy sweep: resolve up to 5 expired, unreported\nreservations (full refund, never counted\ntoward the circuit)"]
+    S --> L["REQUEST_PERMISSION (one atomic Lua script)"]
+    L --> C1{"agent exists?"}
+    C1 -- no --> X1["Denied: unknown_agent"]
+    C1 -- yes --> C2{"circuit open?"}
+    C2 -- "yes, not selected as probe" --> X2["Denied: circuit_open"]
+    C2 -- "closed, or open and selected as probe" --> C3{"budget >= estimatedCost?"}
+    C3 -- no --> X3["Denied: budget_exceeded"]
+    C3 -- yes --> C4{"in-flight < concurrencyLimit?"}
+    C4 -- no --> X4["Denied: concurrency_exceeded"]
+    C4 -- yes --> OK["Reserve cost, take concurrency slot,\nstore reservation with TTL"]
+    OK --> R{"Caller reports an outcome\nbefore the TTL expires?"}
+    R -- "yes: reportOutcome" --> RES["RESOLVE_RESERVATION (one atomic script):\nrefund or settle, release slot,\nretryable failure feeds circuit window,\na successful probe closes the circuit"]
+    R -- "no: caller crashed or never reported" --> EXP["Reservation stays until its TTL passes;\na later requestPermission sweep resolves it\nthrough the same script (idempotent)"]
+```
+
+Queue mode (`mode: "queue"`) wraps this same flow in a jittered, capped-backoff retry loop; it
+stops immediately on `unknown_agent` (waiting can never fix it), and otherwise ends in
+`queue_timeout` or `aborted`. It changes call cadence, never admission correctness.
 
 ### Redis unavailable
 
@@ -589,7 +629,7 @@ await broker.deregister(child.agentId);
 
 ### `budgetKey` reuse with a different `initialBudget`
 
-If `register()` is called with a `budgetKey` that already has an existing pool, and a *different* `initialBudget` is supplied: **the existing pool's value is not overwritten.** First-creation wins; subsequent `initialBudget` values on an already-existing key are ignored (with a warning surfaced via the observability hooks, Section 15). This was chosen over silently topping up (which would make budgets effectively unbounded across repeated calls) and over throwing an error (which would force every caller to separately track "have I already created this pool").
+If `register()` is called with a `budgetKey` that already has an existing pool, and a *different* `initialBudget` is supplied: **the existing pool's value is not overwritten.** First-creation wins; subsequent `initialBudget` values on an already-existing key are silently ignored (`SET ... NX`; there is no hook or warning for this today). This was chosen over silently topping up (which would make budgets effectively unbounded across repeated calls) and over throwing an error (which would force every caller to separately track "have I already created this pool").
 
 ---
 
@@ -600,6 +640,24 @@ If `register()` is called with a `budgetKey` that already has an existing pool, 
 - **Pure logic, no Redis:** input validation (rejecting TTLs above `maxReservationTtl`, malformed inputs), return-shape correctness, error classification. Mock or omit Redis entirely.
 - **Redis integration tests (real Redis, not `fakeredis` or similar mocks):** everything touching Sections 7–11 (budget, concurrency, circuit breaker, atomicity). This is a deliberate departure from the developer's prior use of `fakeredis` in earlier projects — the entire value of this system rests on **true atomic behavior under real concurrency**, which a mock cannot faithfully reproduce. Testing the coordination logic against a simplified mock of the exact thing being verified would be self-defeating. Use a real local Redis instance (Docker) for this layer.
 - **Cross-process tests (the tests that actually prove the core claim of the project):** must use genuinely separate OS processes (`child_process.fork()` in Node), **not** `Worker` threads and **not** async tasks within one process — those can share memory in ways that could make a real coordination bug invisible. Only truly separate processes, coordinating solely through Redis, faithfully mirror real deployment.
+
+### Python and cross-language tests
+
+- **Python unit tests** (`python/tests/unit/`) need no Redis: key construction against literal
+  expected strings, config validation, public-API parity with `typescript/src/index.ts`, and the
+  Lua-equivalence check described in Section 23.
+- **Python integration tests** (`python/tests/integration/`) run against real Redis and are never
+  skipped when it is unreachable (they fail loudly). They include a multi-process harness built on
+  `multiprocessing` with the `spawn` start method (`_process_harness.py`, the Python counterpart of
+  `typescript/test/helpers/harness.ts`) and `failure_modes/` tests for budget contention, competing
+  cleanup, cancellation, Redis interruption and process termination.
+- **Cross-language tests** (`test/cross-language/`) drive one real TypeScript worker and one real
+  Python worker as OS subprocesses over a JSON-Lines protocol. `test_cross_language.py` covers five
+  cooperation scenarios (TypeScript registers / Python admits; Python registers / TypeScript
+  resolves; both languages race one budget pool; one language's failures open the circuit the other
+  observes; cleanup in one language recovers a reservation created by the other).
+  `test_shared_cases.py` replays language-neutral cases from `fixtures/behavioral_cases.json`
+  through each language and checks identical results.
 
 ### The `FakeProvider`-equivalent (relocated from the original provider-abstraction concept)
 
@@ -624,7 +682,7 @@ Deliberately small, per an explicit decision to avoid building an observability 
 
 **Divergence from the original design, recorded in [ADR-0009](adr/0009-fire-and-forget-hooks.md):** every hook is fire-and-forget by construction — invoked synchronously inside a `try/catch`, any returned promise's rejection silently discarded, never awaited before the triggering call returns, and never able to alter the broker's own return value, latency, or error state. This wasn't explicitly specified in the original design and was decided during implementation: a hook exists purely to *observe*, and if a buggy or slow integrator-supplied callback could delay or break an actual admission decision, every hook would become a reliability risk sitting directly in the hot path of a safety-critical system — exactly backwards from what an observability hook is for. `hooks.test.ts` directly asserts this: a hook configured to unconditionally throw does not affect the correctness of the `requestPermission()` call that triggered it.
 
-The broker emits raw signal via these hooks; it does **not** aggregate metrics, format logs, integrate with a specific tracing system, or provide a dashboard. The consuming application wires these hooks into whatever tooling it already uses. This boundary was deliberate — the developer already has strong instincts here from prior projects (typed error taxonomies, ADR authorship) and the library should not impose opinions where the consuming application already has good ones. See [`positioning.md`](positioning.md) for the planned (not yet built) observability layer that sits *on top of* this deliberately small hook surface, as a separate, optional package rather than an expansion of the core.
+The broker emits raw signal via these hooks; it does **not** aggregate metrics, format logs, integrate with a specific tracing system, or provide a dashboard. The consuming application wires these hooks into whatever tooling it already uses. This boundary was deliberate — the developer already has strong instincts here from prior projects (typed error taxonomies, ADR authorship) and the library should not impose opinions where the consuming application already has good ones. Any richer observability (a budget burn-down, a circuit-state timeline) is intentionally left to a separate, optional layer that would sit on top of this small hook surface; none of it exists today.
 
 ---
 
@@ -661,12 +719,14 @@ Derived from actual coupling and responsibility boundaries observed during desig
 | Module | Responsibility | Why it's a separate boundary |
 |---|---|---|
 | `admission/` | The single combined Lua script (budget + concurrency + circuit-breaker check, atomically) and its TypeScript wrapper | Deliberately **not** split into per-concern submodules — budget, concurrency, and circuit checks are atomically fused by necessity (Section 11); splitting them at the code level would misrepresent the real coupling and risk someone "helpfully" separating them into non-atomic calls later |
-| `agents/` | Registration, depth/rootId/budgetKey derivation, heartbeat/TTL, `addBudget()`, `deregister()` | Different Redis structures (hashes, mostly single-key ops), different atomicity needs, different reason to change than admission logic |
+| `agents/` | Registration (root and child), depth/rootId/budgetKey derivation, heartbeat/TTL, `deregister()` | Different Redis structures (hashes, mostly single-key ops), different atomicity needs, different reason to change than admission logic |
 | `redis/` | Thin wrappers around raw Redis calls and Lua script loading | Isolates all raw Redis command construction and script loading in one place, so nothing else in the codebase constructs commands inline |
 | `config/` | Parsing/validating `createBroker()` options (e.g., rejecting a caller-supplied TTL above `maxReservationTtl` before anything touches Redis) | Pure logic, zero Redis coupling |
-| `errors/` | Shared `{ allowed, reason }` shape, the `reason` enum, thrown-error classes | Imported by everything; should have no dependencies of its own |
-| `observability/` | The three hooks from Section 15 | Deliberately small and isolated so the entire observability surface is visible in one file |
-| `testing/` | The fake-downstream helper and the cross-process test harness driver | A real, distinct piece of design work per Section 14, not just "test files" |
+| `errors/` | The thrown-error classes (`BrokerError`, `BrokerConfigError`, `BrokerArgumentError`). Denial `reason` unions live next to the operation that returns them | Imported by everything; has no dependencies of its own |
+| `hooks/` | `fireHook`: the fire-and-forget wrapper behind the four hooks in Section 15 | Deliberately tiny and isolated so hook failures can never alter a broker result |
+| `budget/` | `addBudget()` (additive top-up via a Lua script) | Separate from `agents/` because it has its own script and its own denial type |
+
+The test helpers (cross-process harness, worker, Redis fixtures) live in `typescript/test/helpers/`, and `typescript/src/broker.ts` wires everything into `createBroker`. The Python package follows the same boundaries (`admission.py`, `agents.py`, `budget.py`, `config.py`, `errors.py`, `_hooks.py`, `keys.py`, `_script_runner.py`, `_scripts.py`, `queue.py`, `resolution.py`, `cleanup.py`, `broker.py`).
 
 **Explicitly avoided:** splitting budget logic and concurrency logic into separate modules, despite feeling intuitively like separate concepts — because they are atomically fused inside one Lua script by necessity, and a module boundary that doesn't reflect that real coupling would be cosmetic only.
 
@@ -753,15 +813,70 @@ Stated plainly so no future contributor mistakes an absence for an oversight:
 
 ---
 
-## 23. Suggested Build Order for the Implementation Session
+## 23. TypeScript and Python Implementations
 
-Not part of the original design discussion, but offered as a practical sequencing suggestion given the dependency structure above:
+Agent Broker is a monorepo with two independent packages and one shared protocol:
 
-1. `redis/` layer + Lua script loading infrastructure (everything else depends on this working correctly first).
-2. `agents/` module — registration, depth/rootId/budgetKey derivation, TTL/heartbeat. Testable largely independent of the admission logic.
-3. The single combined admission Lua script (`admission/`) — budget + concurrency + circuit-breaker, together, per ADR-18. This is the hardest and most important piece; do not parallelize its internal logic across multiple scripts.
-4. `errors/` and `config/` — small, low-risk, useful to have stable early since other modules depend on them.
-5. Public API surface (`createBroker`, `register`, `requestPermission`, `reportOutcome`, `addBudget`, `deregister`) wiring the above together.
-6. `observability/` hooks.
-7. `testing/` — the fake-downstream helper and cross-process harness — build this *before* or *alongside* writing the three required failure-mode tests (Section 14), not after, since the harness is itself part of proving the design works.
-8. The three failure-mode cross-process tests, specifically, as the final proof the system does what it claims.
+| | TypeScript | Python |
+|---|---|---|
+| Source | [`typescript/src/`](../typescript/src/) | [`python/src/agent_broker/`](../python/src/agent_broker/) |
+| Package | `agent-broker` on npm, **published** | `agent-broker` (import name `agent_broker`) in [`python/pyproject.toml`](../python/pyproject.toml), **not published** to PyPI |
+| Redis client | `ioredis` (peer dependency, `^5 \|\| ^6`) | `redis-py` (`redis>=5.0.0`), `redis.asyncio` |
+| Runtime | Node.js 22+ | Python 3.10+ |
+| API style | `Promise`-based, camelCase, plain objects | `async`/`await`, snake_case, frozen dataclasses |
+
+```mermaid
+flowchart LR
+    subgraph TS["typescript/ (npm)"]
+        T1["createBroker()"] --> T2["Lua scripts\n(source of truth)"]
+    end
+    subgraph PY["python/ (not yet published)"]
+        P1["create_broker()"] --> P2["Lua scripts\n(verbatim copies)"]
+    end
+    T2 -- "EVALSHA / EVAL" --> R[("Redis\nsame keys, same scripts")]
+    P2 -- "EVALSHA / EVAL" --> R
+    EQ["test_script_equivalence.py\nbyte-diffs each Lua script\nagainst the TypeScript source"] -. guards .-> P2
+    XL["test/cross-language/\nreal TypeScript + Python workers\nagainst one Redis"] -. exercises .-> R
+```
+
+### What is shared, and how that is enforced
+
+- **Redis key construction** (Section 10, length-prefixed segments) is implemented separately in
+  `typescript/src/redis/keys.ts` and `python/src/agent_broker/keys.py` and must produce
+  byte-identical keys. Python's `tests/unit/test_keys.py` checks literal expected strings; the
+  cross-language tests check the two languages actually see each other's state.
+- **The four Lua scripts** (`REQUEST_PERMISSION`, `RESOLVE_RESERVATION`, `REGISTER_CHILD`,
+  `ADD_BUDGET`) are written once, in TypeScript, as inline template strings. Python holds verbatim
+  copies in `_scripts.py`. There is no shared `.lua` file; instead
+  `python/tests/unit/test_script_equivalence.py` extracts each script from the TypeScript source
+  and fails if the Python copy differs by a single byte. Changing a script therefore means
+  changing both files in the same commit.
+- **Behavior** is checked end to end by `test/cross-language/` (Section 14), which is the evidence
+  for the claim that a TypeScript process and a Python process can safely share one budget pool,
+  circuit breaker and reservation set. That evidence covers the scenarios listed there, not every
+  possible interleaving.
+
+### Where the Python implementation genuinely differs
+
+- **Async only.** Every `Broker` method is a coroutine and the Redis helpers `await` an
+  `redis.asyncio` client. There is no synchronous API.
+- **Queue-mode cancellation.** TypeScript takes an `AbortSignal`; Python takes an optional
+  `asyncio.Event` (`QueueOptions.cancel_event`), which yields `reason: "aborted"` as a return
+  value, and also honours ordinary task cancellation (`CancelledError`). Python's `QueueOptions`
+  has no `mode` field: passing a `QueueOptions` is what selects queue mode.
+- **Hooks** are plain callables receiving a `dict`; sync or async, fire-and-forget, failures
+  swallowed, like the TypeScript hooks (Section 15).
+- **Registration.** `Broker.register()` takes either a `RegisterRootInput` or a `RegisterChildInput`
+  (dispatching on the input type); `register_root` / `register_child` remain as aliases.
+- **Public surface.** `agent_broker/__init__.py` exports the same names as
+  `typescript/src/index.ts` (`test_public_api.py` enforces it), plus `CircuitBreakerOptions`.
+  Lower-level functions are importable from their submodules but are not public API.
+- **Immutability** comes from `@dataclass(frozen=True)` rather than `Object.freeze`.
+
+### Status
+
+TypeScript is published and is the reference implementation. Python is feature-complete against
+the same operations (`register`, `request_permission` incl. queue mode, `report_outcome`,
+`deregister`, `add_budget`, hooks, lazy cleanup, Redis-unavailable handling) but has not been
+published; install it from a checkout (see [`python/README.md`](../python/README.md)). Because
+the wire protocol is shared, publishing it requires no protocol change.

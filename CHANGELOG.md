@@ -15,6 +15,14 @@ pre-1.0).
 ## [Unreleased]
 
 ### Added
+- `typescript/README.md`: TypeScript package documentation. `package.json` already listed
+  `README.md` in `files`, but no such file existed in `typescript/`, so the npm package page had
+  no README.
+- `docs/ARCHITECTURE.md` §23 ("TypeScript and Python implementations") and a failure-handling
+  flow diagram (Diagram E) in §12; a Python and cross-language testing subsection in §14.
+- README: side-by-side TypeScript/Python install and quick start, a "Verifying it" section, a
+  repository layout, and a known-limitations list. The Python package is described as
+  unpublished (not on PyPI) everywhere it appears, with install-from-repository instructions.
 - GitHub Actions CI is now split into three path-filtered workflows —
   `.github/workflows/typescript.yml`, `python.yml` and `cross-language.yml` — so the Python
   suite (mypy strict, unit, integration, wheel build) and the cross-language suite finally run in
@@ -28,6 +36,15 @@ pre-1.0).
   released).
 
 ### Changed
+- README restructured as a technical overview of both implementations; the standalone "Why this
+  exists" section is now a table of the three failure modes and how each is handled.
+- `docs/ARCHITECTURE.md`: removed the implementation-handoff framing and the obsolete build-order
+  section; corrected the documented admission check order (existence, circuit, budget,
+  concurrency); removed mentions of a "recovering" circuit state (only `closed`/`open` exist);
+  fixed stale section and ADR cross-references; corrected the module table (`hooks/`,
+  `budget/`); documented that an unknown-cost success keeps the reserved estimate as the settled
+  cost; and removed a claim that a mismatched `initialBudget` raises a hook warning (it is
+  silently ignored).
 - Python: the top-level `agent_broker` public API now mirrors `typescript/src/index.ts`. It
   exports `create_broker`, `Broker`, the option/input/result types, the denial-reason types
   and the error classes. Lower-level functions (`request_permission`, `register_root`,
@@ -38,7 +55,14 @@ pre-1.0).
 - Renamed `docs/agent-broker-architecture.md` to `docs/ARCHITECTURE.md` and updated every link
   to it.
 
+### Removed
+- `docs/python-port/` (planning documents for the Python port) and `docs/positioning.md`. The
+  still-accurate parts of the Python design notes now live in `docs/ARCHITECTURE.md` §23. Links
+  and code comments that pointed at the removed files were updated.
+
 ### Fixed
+- Broken links to the removed planning documents in the READMEs, Python docstrings, and test
+  comments.
 - Cross-language tests: `ts_worker.ts` could not resolve `ioredis` after the TypeScript package
   moved into `typescript/`, so every TypeScript-worker test failed. The harness now sets
   `NODE_PATH` to `typescript/node_modules`.

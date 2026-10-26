@@ -25,24 +25,31 @@ This package implements the same coordination model as the TypeScript package, a
 Redis data model — the two can coordinate through one shared Redis instance (see
 [Interoperating with the TypeScript package](#interoperating-with-the-typescript-package)
 below). For the broader "why does this exist" discussion, see the
-[root README](../README.md#why-this-exists) and
+[root README](../README.md#the-problem-and-what-the-library-does-about-it) and
 [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
 
 ## Status
 
-Feature-complete relative to the TypeScript package's public API (every operation on its
-`Broker` interface has a tested Python equivalent), but not yet published to PyPI — see
-[`docs/python-port/FEATURE_PARITY_MATRIX.md`](../docs/python-port/FEATURE_PARITY_MATRIX.md) for
-a feature-by-feature status table, and
-[`docs/python-port/IMPLEMENTATION_PLAN.md`](../docs/python-port/IMPLEMENTATION_PLAN.md) for the
-milestone roadmap this was built against.
+**Not yet published.** This package has no PyPI release; install it from this repository (see
+below). It is feature-complete relative to the TypeScript package's public API: every operation
+on its `Broker` interface has a Python equivalent, and `agent_broker`'s top-level exports mirror
+`typescript/src/index.ts` (enforced by `tests/unit/test_public_api.py`). How the two
+implementations relate is documented in
+[`docs/ARCHITECTURE.md` §23](../docs/ARCHITECTURE.md#23-typescript-and-python-implementations).
 
 ## Installation
 
+The package is **not on PyPI yet**. Install it from this repository:
+
 ```bash
-# from a checkout of this repository
-pip install -e python/
+# directly from GitHub (default branch)
+pip install "git+https://github.com/Devpaul-01/agent-broker.git#subdirectory=python"
+
+# or from a checkout of this repository (editable; add [dev] for pytest and mypy)
+pip install -e "python/[dev]"
 ```
+
+The distribution name in `pyproject.toml` is `agent-broker`; the import name is `agent_broker`.
 
 Requires Python 3.10 or later, and a reachable Redis instance (local, containerized, or
 managed). `redis-py` is a regular dependency (installed automatically) — you still bring your
@@ -50,7 +57,6 @@ own Redis client instance to `create_broker`; this library never manages a conne
 the same design choice the TypeScript package makes (see
 [ADR-0006](../docs/adr/0006-no-owned-redis-connection.md)).
 
-Not yet on PyPI. Once it is, installation will be `pip install agent-broker`.
 
 ## Quick start
 
@@ -230,7 +236,7 @@ cancel_event.set()  # interrupts the wait, returns {"allowed": False, "reason": 
 Both implementations use byte-identical Redis key construction and the exact same Lua scripts
 for every atomic operation — verified automatically on every test run by a test that diffs the
 Python copies of each script against the TypeScript source they were copied from (see
-[`docs/python-port/ARCHITECTURE.md`](../docs/python-port/ARCHITECTURE.md)). This means a
+[`docs/ARCHITECTURE.md` §23](../docs/ARCHITECTURE.md#23-typescript-and-python-implementations)). This means a
 TypeScript process and a Python process can register agents, request permission, and resolve
 reservations against the very same budget pool, target, and circuit-breaker state, as long as
 both point at the same Redis instance/database. This is proven with real cross-process,
@@ -269,9 +275,7 @@ regardless of how many processes race for it; a process that crashes between res
 resolution has its reservation recovered by the next caller's lazy cleanup sweep with a full
 refund; two workers racing to clean up the very same expired reservation refund it exactly once;
 a caller that retries `report_outcome` after presuming a response was lost lands as
-`already_resolved` rather than double-refunding. See
-[`docs/python-port/FEATURE_PARITY_MATRIX.md`](../docs/python-port/FEATURE_PARITY_MATRIX.md) for
-the complete, honestly-tracked list of what's tested and how.
+`already_resolved` rather than double-refunding.
 
 ## Testing and development
 
@@ -287,9 +291,9 @@ mypy --strict src/agent_broker
 Integration tests point at `redis://localhost:6379/15` by default (override with
 `TEST_REDIS_URL`) and are never silently skipped if Redis is unreachable — a missing Redis
 surfaces as a clear, loud failure with instructions, the same philosophy as the TypeScript
-package's own test suite. See
-[`docs/python-port/BASELINE.md`](../docs/python-port/BASELINE.md) for how a local Redis was
-provisioned during this port's own development, if you need a reference.
+package's own test suite. They **flush the database they run against** (database 15 by
+default), so never point `TEST_REDIS_URL` at a Redis instance whose data you care about. A quick
+local Redis: `docker run -d -p 6379:6379 redis:7-alpine`.
 
 For cross-language tests, see [`test/cross-language/README.md`](../test/cross-language/README.md)
 at the repository root — they additionally require `npx` on `PATH` to run the TypeScript worker.
@@ -302,8 +306,7 @@ at the repository root — they additionally require `npx` on `PATH` to run the 
 - No dedicated test yet proving a hook callback receives the exact expected payload shape on a
   real event (hooks are wired into every call site that fires one in the TypeScript source, but
   this specific verification — mirroring the TypeScript suite's own `hooks.test.ts` — remains
-  open; tracked in
-  [`docs/python-port/FEATURE_PARITY_MATRIX.md`](../docs/python-port/FEATURE_PARITY_MATRIX.md)).
+  open).
 - Supported Python versions: 3.10, 3.11, 3.12, 3.13 (tracks `redis-py`'s own supported range;
   developed and tested against 3.12 — see `pyproject.toml`'s `classifiers` for the full
   declared list).
@@ -316,6 +319,6 @@ at the repository root — they additionally require `npx` on `PATH` to run the 
 - [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) — full design
   rationale, invariants, Redis data model, and failure model.
 - [`docs/adr/`](../docs/adr/) — architecture decision records.
-- [`docs/python-port/`](../docs/python-port/) — this port's own architecture decisions, feature
-  parity status, and implementation plan.
+- [`test/cross-language/`](../test/cross-language/README.md) — tests proving the TypeScript and
+  Python implementations interoperate through one Redis.
 - [`examples/`](examples/) — runnable example scripts.

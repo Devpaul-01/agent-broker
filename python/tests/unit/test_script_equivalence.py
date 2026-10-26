@@ -2,7 +2,7 @@
 literal string in their corresponding TypeScript source file.
 
 This is the automated version of the manual check promised in
-``docs/python-port/ARCHITECTURE.md`` §2: rather than trusting that a copy-paste stayed correct,
+``docs/ARCHITECTURE.md`` §23: rather than trusting that a copy-paste stayed correct,
 this test re-extracts the literal template-string argument to each ``defineScript(...)`` call
 directly from the TS source file (a deliberately dumb, regex-based extraction — not a full TS
 parser, which would be its own maintenance burden for four call sites) and diffs it against the
@@ -65,7 +65,7 @@ def test_lua_source_matches_typescript_verbatim(ts_file: str, ts_const: str, py_
     ts_lua = _extract_template_literal(ts_source, ts_const)
     assert ts_lua == py_source, (
         f"Lua script drift detected between {ts_file} ({ts_const}) and the Python copy in "
-        "_scripts.py — see docs/python-port/ARCHITECTURE.md §2. Update whichever side is stale."
+        "_scripts.py — see docs/ARCHITECTURE.md §23. Update whichever side is stale."
     )
 
 

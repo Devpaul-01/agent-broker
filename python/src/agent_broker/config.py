@@ -3,7 +3,7 @@
 Ports ``src/config/index.ts``. Validation rules, defaults, and error messages are kept
 semantically identical to the TypeScript implementation (same fields, same bounds, same
 cross-field invariants) so that behavior documented for one language holds for both — see
-``docs/python-port/FEATURE_PARITY_MATRIX.md``. The *shape* is idiomatic Python (frozen
+``docs/ARCHITECTURE.md`` §23. The *shape* is idiomatic Python (frozen
 dataclasses, not a hand-rolled "parse a dict" function returning a plain dict), matching the
 project's instruction not to mechanically translate TypeScript naming/structure.
 

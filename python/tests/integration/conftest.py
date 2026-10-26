@@ -27,8 +27,8 @@ async def redis_client() -> redis_asyncio.Redis:  # type: ignore[misc]
     except RedisError as cause:
         await client.aclose()
         pytest.fail(
-            f"Cannot reach test Redis at {TEST_REDIS_URL}. Start one first (see "
-            f"docs/python-port/BASELINE.md for provisioning this sandbox used). "
+            f"Cannot reach test Redis at {TEST_REDIS_URL}. Start one first (e.g. "
+            f"`docker run -d -p 6379:6379 redis:7-alpine`). "
             f"These tests need a real Redis and are never skipped. Cause: {cause}"
         )
     await client.flushdb()

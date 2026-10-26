@@ -1,7 +1,7 @@
 """Lua script sources — the shared Redis protocol surface of this library.
 
 These four Lua strings are copied verbatim from the TypeScript implementation, which is this
-port's documented source of truth (see ``docs/python-port/ARCHITECTURE.md`` §2: "Option B").
+port's documented source of truth (see ``docs/ARCHITECTURE.md`` §23).
 Each one is annotated with the exact TS file it was copied from, at baseline commit `36f7674`.
 
 ``tests/unit/test_script_equivalence.py`` extracts the literal Lua string out of each TS source

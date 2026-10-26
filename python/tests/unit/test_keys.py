@@ -31,9 +31,9 @@ def test_different_key_types_stay_in_different_namespaces() -> None:
 
 
 # --- Golden values captured from the TS implementation at baseline commit 36f7674 ---
-# Captured via: `npx tsx` evaluating src/redis/keys.ts directly (see
-# docs/python-port/IMPLEMENTATION_PLAN.md, Milestone 2 for the planned automated version of
-# this cross-check; these are the Milestone 1 manual snapshot).
+# Captured via: `npx tsx` evaluating src/redis/keys.ts directly (the end-to-end
+# cross-check against live TypeScript processes is test/cross-language/; these literals are a
+# manual snapshot).
 
 def test_matches_ts_golden_values() -> None:
     assert keys.agent("abc-123") == "agent:abc-123"

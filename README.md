@@ -1,14 +1,18 @@
 # agent-broker
 
-[![npm version](https://img.shields.io/npm/v/agent-broker.svg)](https://www.npmjs.com/package/agent-broker)
+**A Redis-backed admission gate for multi-process agent and LLM-calling systems, with TypeScript and Python implementations that coordinate through the same Redis.**
 
-**A Redis-backed coordination gate for multi-process agent and LLM-calling systems.** Published and live on npm.
+`agent-broker` answers one question, correctly, under real concurrency and across real process boundaries: *"Is this call allowed to happen right now?"* It accounts for shared budget, delegation depth, in-flight concurrency, and recent failure history against the target you are about to call. It does **not** make the call for you: you ask before, you report after, and you stay in full control of the request itself.
 
-`agent-broker` answers one question, correctly, under real concurrency, across real process boundaries: *"Is this call allowed to happen right now?"* — accounting for shared budget, delegation depth, in-flight concurrency, and recent failure history against the target you're about to call.
+| | TypeScript | Python |
+|---|---|---|
+| Status | **Published on npm** ([`agent-broker`](https://www.npmjs.com/package/agent-broker)) | **Not yet published.** Install from this repository (below). Not on PyPI. |
+| Source | [`typescript/`](typescript/) | [`python/`](python/) |
+| Install | `npm install agent-broker ioredis` | `pip install "git+https://github.com/Devpaul-01/agent-broker.git#subdirectory=python"` |
+| Runtime | Node.js 22+, `ioredis` 5 or 6 | Python 3.10+, `redis-py` 5+, async (`redis.asyncio`) |
+| Docs | this README, [`typescript/`](typescript/README.md) | [`python/README.md`](python/README.md) |
 
-It does **not** make the call for you. It is a pure permission gate: you ask before, you report after, you stay in full control of how the actual request happens.
-
-> **Coming next:** a LangGraph-native integration is currently in development — see [Project status and roadmap](#project-status-and-roadmap).
+Both implementations are feature-complete against the same operations and run the **same Lua scripts against the same Redis keys**, so a TypeScript process and a Python process can draw from one budget pool and one circuit breaker. That is exercised by real cross-language tests (see [Verifying it](#verifying-it)), not just asserted.
 
 ```
 your process → broker.requestPermission(...) → { allowed: true, reservationId }
@@ -16,48 +20,62 @@ your process → (you make the real call yourself, however you want)
 your process → broker.reportOutcome({ reservationId, success, actualCost })
 ```
 
----
-
-## Why this exists
-
-If you run more than one process — or more than one agent, or more than one user session — against a shared downstream resource (an LLM provider, a rate-limited API, anything with a cost and a failure mode), you eventually hit three problems that don't show up until you're running at real concurrency:
-
-1. **Correlated retries.** Every process retries sanely on its own. Collectively, ten processes retrying twice each just sent a downstream service a burst of 20 near-simultaneous requests it had no way to anticipate.
-2. **Budget races.** Two processes both check "do I have enough budget left?" a few milliseconds apart. Both see yes. Both spend. The shared pool goes negative, and neither process did anything wrong in isolation.
-3. **Unbounded recursive delegation.** An agent spawns a sub-agent, which spawns another. Nothing about any single node in that tree can see or limit how deep the *whole tree* has gotten — depth is a property of the tree, not of any one process.
-
-Each of these looks fine from inside any single process and only becomes a problem in aggregate — which means no single process can fix it by being better-written. You need a shared point of coordination. `agent-broker` is that point, using Redis as the thing every process actually has in common.
-
-## What this is not
-
-To save you a wrong assumption: this is **not** an LLM gateway in the sense of Portkey, LiteLLM, or Cloudflare AI Gateway. Those sit *in* the request path — they route, cache, and proxy the actual call to the provider. `agent-broker` never touches the provider at all. It solves a narrower, different problem: cross-process safety coordination, not request routing. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full boundary discussion, and [`docs/positioning.md`](docs/positioning.md) for how this fits (and doesn't yet fit) into agent-framework workflows.
-
-It is also not a security boundary against a malicious caller. It protects against *accidental* and *architectural* bypass — not against a process owner willing to lie to it. See [Trust model](#trust-model) below.
+> **Coming next:** a LangGraph-native integration is in development and not yet released. See [Project status](#project-status-and-roadmap).
 
 ---
 
-## Installation
+## The problem, and what the library does about it
 
-`agent-broker` is [published on npm](https://www.npmjs.com/package/agent-broker) and live — no build step or git install required.
+If more than one process, agent, or user session shares a downstream resource (an LLM provider, a rate-limited API), three problems appear that no single process can fix by being better written:
+
+| Failure at scale | Why it is invisible locally | How agent-broker handles it |
+|---|---|---|
+| **Correlated retries.** Ten processes each retry twice, so the target sees a burst of 20. | Each process looks well-behaved on its own. | A sliding-window failure count per target, shared via Redis. Crossing a soft threshold returns a `retryAfter` backpressure hint; crossing the hard threshold opens a circuit that admits only a small `probeRate` of calls as recovery probes. |
+| **Budget races.** Two processes both see "enough budget" a few milliseconds apart and both spend it. | The check-then-spend gap is invisible without shared state. | Check-and-reserve is one atomic Lua script. The reservation is reconciled against actual cost when you report back. |
+| **Unbounded delegation.** An agent spawns sub-agents that spawn more. | Depth is a property of the whole tree, not of any node. | Child identity, depth, root and budget key are derived by the broker from stored parent state inside one atomic script, never accepted from the caller. |
+
+Concurrency is bounded per `(target, budgetKey)` pair in the same atomic admission step.
+
+
+## Architecture at a glance
+
+The broker is an **in-process library**, not a service: every application process links it and talks to one shared Redis. There is no broker process to deploy.
+
+```mermaid
+flowchart LR
+    subgraph A["Process A (TypeScript)"]
+        A1["your code"] --> A2["agent-broker"]
+    end
+    subgraph B["Process B (Python)"]
+        B1["your code"] --> B2["agent-broker"]
+    end
+    A2 -- "Lua: atomic admit / resolve" --> R[("Redis")]
+    B2 -- "Lua: atomic admit / resolve" --> R
+    A1 -. "your own call" .-> T["Downstream target"]
+    B1 -. "your own call" .-> T
+```
+
+Four Lua scripts are the entire coordination surface. `REQUEST_PERMISSION` checks agent existence, circuit state, budget, and concurrency and reserves against all of them in one round trip. `RESOLVE_RESERVATION` is the single path that closes a reservation, shared by `reportOutcome` and the lazy cleanup of abandoned reservations. `REGISTER_CHILD` and `ADD_BUDGET` cover delegation and budget top-ups. The full request lifecycle, Redis data model, failure model, and sequence and state diagrams are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+---
+
+## Installation and quick start
+
+You need a reachable Redis (local, containerized, or managed). The library never creates or owns a Redis connection; you pass your own client in ([ADR-0006](docs/adr/0006-no-owned-redis-connection.md)).
+
+### TypeScript
 
 ```bash
 npm install agent-broker ioredis
 ```
 
-Requires Node.js 22 or later, and a reachable Redis instance (local, containerized, or managed).
-
-`ioredis` is a peer dependency — you bring your own Redis connection; the library never manages one itself (see [ADR-0006](docs/adr/0006-no-owned-redis-connection.md)).
-
-Using Python instead? See [Python](#python) below — it's a separate, genuine implementation of this same library, not a wrapper around this one.
-
-## Quick start
+Requires Node.js 22 or later. `ioredis` (`^5` or `^6`) is a peer dependency.
 
 ```ts
 import { createBroker } from "agent-broker";
 import { Redis } from "ioredis";
 
-const redis = new Redis(process.env.REDIS_URL);
-const broker = createBroker({ redis });
+const broker = createBroker({ redis: new Redis(process.env.REDIS_URL) });
 
 // Register a root agent and fund its budget pool.
 const root = await broker.register({ budgetKey: "user-123", initialBudget: 5000 });
@@ -68,50 +86,90 @@ const decision = await broker.requestPermission({
   target: "groq:llama-3.3-70b-versatile",
   estimatedCost: 800,
 });
-
 if (!decision.allowed) {
-  // decision.reason: 'unknown_agent' | 'aborted' | 'budget_exceeded'
-  //                | 'concurrency_exceeded' | 'circuit_open' | 'redis_unavailable' | 'queue_timeout'
-  // ('aborted' and 'queue_timeout' only apply in queue mode — see "Queue mode" below.
-  //  'depth_exceeded' is a register() reason, not a requestPermission() reason — see below.)
+  // decision.reason: 'unknown_agent' | 'aborted' | 'budget_exceeded' | 'concurrency_exceeded'
+  //                | 'circuit_open' | 'redis_unavailable' | 'queue_timeout'
+  // ('aborted' and 'queue_timeout' only occur in queue mode.)
   throw new Error(`denied: ${decision.reason}`);
 }
 
-// Make your actual call however you normally would. agent-broker has no
-// opinion about your SDK, your provider, or your prompt.
+// Make your actual call however you normally would, then report back.
 const response = await yourLLMClient.call(/* ... */);
-
-// Report back so the reservation can be reconciled.
 await broker.reportOutcome({
   reservationId: decision.reservationId,
   success: true,
   actualCost: response.usage.totalTokens,
 });
-```
 
-### Delegating to a sub-agent
-
-```ts
+// Delegate to a sub-agent. depth, rootId and budgetKey are derived by the broker.
 const child = await broker.register({ parentId: root.agentId });
-// child.depth, child.rootId, child.budgetKey are all broker-derived —
-// never something you pass in. See "Trust model" below for why.
-
 if ("allowed" in child && child.allowed === false) {
-  // child.reason === 'depth_exceeded' or 'unknown_agent'
+  // child.reason: 'depth_exceeded' | 'unknown_agent'
 }
+
+// If the downstream call fails transiently instead, report it as retryable; this failure
+// then counts toward the shared circuit-breaker state for the target:
+//   await broker.reportOutcome({ reservationId: decision.reservationId, success: false, retryable: true });
 ```
 
-### Handling a transient failure
+### Python (not yet published)
 
-```ts
-await broker.reportOutcome({
-  reservationId: decision.reservationId,
-  success: false,
-  retryable: true, // this failure counts toward shared circuit-breaker state
-});
+The Python package is **not on PyPI** and has no release yet. Until it is published, install it from this repository. Its distribution name in [`python/pyproject.toml`](python/pyproject.toml) is `agent-broker` and its import name is `agent_broker`.
+
+```bash
+# directly from GitHub (default branch)
+pip install "git+https://github.com/Devpaul-01/agent-broker.git#subdirectory=python"
+
+# or from a local checkout, editable, with test tooling
+git clone https://github.com/Devpaul-01/agent-broker.git
+pip install -e "agent-broker/python[dev]"
 ```
+
+Requires Python 3.10 or later. `redis-py` 5+ is installed automatically. The API is async-only.
+
+```python
+import asyncio
+import redis.asyncio as redis
+from agent_broker import (
+    Admitted, BrokerOptions, RegisterChildInput, RegisterDenial, RegisterRootInput,
+    ReportOutcomeInput, RequestPermissionInput, create_broker,
+)
+
+async def main() -> None:
+    client = redis.Redis.from_url("redis://localhost:6379", decode_responses=True)
+    broker = create_broker(BrokerOptions(redis=client))
+
+    root = await broker.register(RegisterRootInput(budget_key="user-123", initial_budget=5000))
+
+    decision = await broker.request_permission(
+        RequestPermissionInput(agent_id=root.agent_id, target="groq:llama-3.3-70b-versatile", estimated_cost=800)
+    )
+    if not isinstance(decision, Admitted):
+        raise RuntimeError(f"denied: {decision.reason}")
+
+    # ... make your real call, then report back ...
+    await broker.report_outcome(
+        ReportOutcomeInput(reservation_id=decision.reservation_id, success=True, actual_cost=743)
+    )
+
+    child = await broker.register(RegisterChildInput(parent_id=root.agent_id))
+    if isinstance(child, RegisterDenial):
+        ...  # child.reason: "depth_exceeded" | "unknown_agent"
+
+    await client.aclose()
+
+asyncio.run(main())
+```
+
+Runnable versions live in [`python/examples/`](python/examples/). Python-specific details (async usage and cancellation, hooks, error handling) are in [`python/README.md`](python/README.md).
 
 ---
+
+## What this is not
+
+To save you a wrong assumption: this is **not** an LLM gateway in the sense of Portkey, LiteLLM, or Cloudflare AI Gateway. Those sit *in* the request path — they route, cache, and proxy the actual call to the provider. `agent-broker` never touches the provider at all. It solves a narrower, different problem: cross-process safety coordination, not request routing. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full boundary discussion.
+
+It is also not a security boundary against a malicious caller. It protects against *accidental* and *architectural* bypass — not against a process owner willing to lie to it. See [Trust model](#trust-model) below.
 
 ## Core concepts
 
@@ -128,6 +186,8 @@ Full mechanics, invariants, and the reasoning behind each of these are in [`docs
 ---
 
 ## Configuration
+
+TypeScript shown; the Python package takes the same options as snake_case fields of `BrokerOptions` (`max_depth`, `agent_ttl`, `concurrency_limit`, `on_redis_unavailable`, `circuit_breaker=CircuitBreakerOptions(...)`, `hooks=BrokerHooks(...)`) with identical defaults and validation.
 
 ```ts
 const broker = createBroker({
@@ -162,7 +222,7 @@ If Redis is unreachable, `onRedisUnavailable` decides what happens, and it defau
 - **`'deny'`** (default): calls are denied with `reason: 'redis_unavailable'`. The one moment coordination can't function is exactly the moment you don't want to silently lose the guarantees it provides.
 - **`'allow'`**: calls are admitted without a reservation (`degraded: true`, `reservationId: null`). Pick this only if raw availability matters more than the coordination guarantees during an outage — this library will not make that tradeoff silently on your behalf.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#12-failure-model) for the full breakdown of crash and timeout behavior.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#12-failure-model) for the full failure model, including a flow diagram of every denial and recovery path.
 
 ## Queue mode
 
@@ -176,6 +236,8 @@ await broker.requestPermission(
 ```
 
 This polls the same atomic admission path with backoff until admitted, `queueTimeout` elapses (`reason: 'queue_timeout'`), or the denial reason is one that waiting can never fix (`unknown_agent` returns immediately, not after a timeout). You can also pass an `AbortSignal` (`{ mode: "queue", signal }`) to cancel the wait externally; an aborted wait resolves with `reason: 'aborted'`.
+
+---
 
 ---
 
@@ -199,9 +261,9 @@ If you need protection against a genuinely adversarial, non-cooperating caller, 
 
 ## Engineering highlights
 
-For a reviewer short on time, these are the mechanisms worth looking at first — each one is a
-single atomic Redis operation, not a read-then-write pair a concurrent caller could interleave
-with:
+For a reviewer short on time, these are the mechanisms worth reading first. Paths are the
+TypeScript implementation; the Python package contains the same scripts and logic under
+`python/src/agent_broker/`.
 
 - **Single-round-trip admission control.** `requestPermission` checks agent existence, circuit
   state, budget, and concurrency, and reserves against all of them, in one Lua script —
@@ -228,73 +290,85 @@ with:
   orphan agent and/or orphan budget pool) and why it's harmless, rather than glossing over it —
   `typescript/src/agents/register.ts`.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full request
-lifecycle, Redis data model, and failure model — including diagrams of each of the mechanisms
-above.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full request lifecycle, Redis data
+model, and failure model, with diagrams.
 
-## Python
+---
 
-Agent Broker also has a full Python implementation, living in [`python/`](python/) in this same
-repository. It's a genuine port — real Python, built against [`redis-py`](https://github.com/redis/redis-py) — not a wrapper that shells out to this TypeScript package, so using it
-never requires Node.js.
+## Verifying it
 
-**Which one should you use?** If your application is in Node.js/TypeScript, use this package. If
-it's in Python, use the Python package. Both implement the same coordination model (shared
-budgets, delegation depth, concurrency limits, circuit breaking) against the same Redis data
-model, so the choice is purely about which language your application is already in — not a
-feature tradeoff in either direction.
-
-**Can both languages coordinate through the same Redis?** Yes. Both implementations use
-byte-identical Redis key construction and the exact same Lua scripts for every atomic operation
-(verified by an automated test that diffs the Python copies against this package's own source on
-every test run — see [`docs/python-port/ARCHITECTURE.md`](docs/python-port/ARCHITECTURE.md)), so
-a TypeScript process and a Python process can register agents, request permission, and resolve
-reservations against the very same budget pool, target, and circuit-breaker state. This is
-exercised directly by real cross-language integration tests — not just asserted — in
-[`test/cross-language/`](test/cross-language/): a TypeScript process registering an agent that a
-Python process then calls `requestPermission` against (and the reverse), both languages racing
-concurrently for one shared budget pool, one language's failures opening the circuit breaker and
-being observed as `circuit_open` by the other, and a reservation created by one language being
-recovered by the other's lazy cleanup sweep.
-
-Install with:
+Integration and cross-language tests need a real Redis (no mocks, by design) and **flush database 15** of the instance they point at, so never aim them at a Redis you care about. They default to `redis://localhost:6379/15` and can be redirected with `TEST_REDIS_URL`. A missing Redis fails the tests loudly rather than skipping them.
 
 ```bash
-pip install -e python/  # from a checkout of this repository; see python/README.md for details
+# Redis (either works; the TypeScript package ships a compose file)
+docker run -d -p 6379:6379 redis:7-alpine
+# or: cd typescript && npm run redis:up
+
+# TypeScript
+cd typescript && npm ci
+npm run typecheck && npm test
+
+# Python
+cd python && pip install -e ".[dev]"
+mypy --strict src/agent_broker
+pytest tests/unit tests/integration
+
+# Cross-language: real TypeScript and Python workers sharing one Redis
+cd typescript && npm ci && cd ..          # the TypeScript worker needs its dependencies
+pytest test/cross-language/ -v
 ```
 
-(`agent-broker` is not yet published to PyPI — see
-[`docs/python-port/IMPLEMENTATION_PLAN.md`](docs/python-port/IMPLEMENTATION_PLAN.md), Milestone 6,
-for packaging/release status.)
+What the suites cover:
 
-Python-specific documentation, the full API reference, and usage examples live in
-[`python/README.md`](python/README.md) and [`python/examples/`](python/examples/). For the
-engineering history of the port itself — what was audited, how milestones were sequenced, and
-exactly what's been verified and how — see [`docs/python-port/`](docs/python-port/), in
-particular [`FEATURE_PARITY_MATRIX.md`](docs/python-port/FEATURE_PARITY_MATRIX.md) for a
-feature-by-feature status table and [`patches/python-port/MANIFEST.md`](patches/python-port/MANIFEST.md)
-for the verified milestone patches that built it.
+- **Cross-process atomicity.** Both languages fork real OS processes (not threads or async tasks) that race for one budget pool, one concurrency limit, and one circuit breaker, and assert on exact admission counts.
+- **Crash recovery.** A process is killed mid-call; a later `requestPermission` sweeps the abandoned reservation and refunds it exactly once, including when a late report races the sweep.
+- **Cross-language interoperability** ([`test/cross-language/`](test/cross-language/)): one language registers and the other admits against it; both race one pool; one language's failures open a circuit the other observes; one language's cleanup recovers the other's abandoned reservation. A shared set of language-neutral behavioral cases is replayed through each language and must produce the same results.
+- **Protocol drift guards.** A Python unit test byte-diffs each Lua script against the TypeScript source, and another fails if the Python public exports drift from `typescript/src/index.ts`.
+
+CI runs three path-filtered workflows (TypeScript, Python, cross-language) in [`.github/workflows/`](.github/workflows/).
+
+Measured behavior (admission latency, concurrency-limit and crash-recovery correctness) from a separate experiment workspace is recorded in [`typescript/measurement/`](typescript/measurement/RESULTS_SUMMARY.md), with the environment and limitations of each experiment stated in its own report. Those numbers come from a synthetic benchmark against a local Redis on a single-core machine; treat them as a characterization of the script's own cost, not a production latency claim.
+
+---
+
+## Repository layout
+
+```
+agent-broker/
+├── typescript/            TypeScript package (published to npm): src/, test/, measurement/
+├── python/                Python package (not yet published): src/agent_broker/, tests/, examples/
+├── test/cross-language/   Tests that run both implementations against one Redis
+├── docs/
+│   ├── ARCHITECTURE.md    Design, invariants, Redis data model, failure model, diagrams
+│   └── adr/               Architecture decision records (including rejected alternatives)
+└── .github/workflows/     typescript.yml, python.yml, cross-language.yml
+```
+
+## Known limitations
+
+- **The Python package is unpublished and async-only.** There is no synchronous API.
+- **The broker only knows what you tell it.** Success, `retryable`, and `actualCost` are caller-reported and cannot be verified ([Trust model](#trust-model)).
+- **Not for sub-10 ms operations.** Every admission costs at least one Redis round trip, and a single very hot `target` or `budgetKey` serializes on Redis's single-threaded execution ([ARCHITECTURE.md §16](docs/ARCHITECTURE.md#16-performance-model)).
+- **Circuit breaking is failure density, not per-caller attribution,** so a popular target can trip it from uncorrelated failures ([§20](docs/ARCHITECTURE.md#20-known-limitations-deliberate-reviewed-accepted--not-oversights)).
+- **No framework adapters, agent-aware call metadata, or built-in dashboards yet.** Observability is four fire-and-forget hooks.
+- **Python hook payloads** are wired at every call site, but no Python test yet asserts the exact payload shape that the TypeScript `hooks.test.ts` does.
 
 ## Project status and roadmap
 
-`agent-broker` is published and live on [npm](https://www.npmjs.com/package/agent-broker) — `npm install agent-broker ioredis` works today. The Python package is feature-complete against the same API but not yet published to PyPI.
+The TypeScript package is published and usable today (`npm install agent-broker ioredis`). The Python package is feature-complete against the same API but has not been published; there is no PyPI release yet.
 
-**In progress: LangGraph integration.** I'm currently building a version that integrates cleanly with the [LangGraph](https://www.langchain.com/langgraph) framework, so that a graph's nodes and sub-agents can be gated by the broker without hand-wiring `requestPermission` / `reportOutcome` around every call. This is work in progress and not yet released — nothing in the current packages is LangGraph-specific, and the API for it isn't final. Until it lands, you can use the broker alongside LangGraph the same way you would with any other framework: ask before the call, report after. Design notes live in [`docs/positioning.md`](docs/positioning.md).
-
-This library solves cross-process budget, depth, and retry-storm coordination, and that core is tested under real multi-process concurrency (see [`docs/ARCHITECTURE.md#14-testing-architecture`](docs/ARCHITECTURE.md#14-testing-architecture)). It does **not** yet have agent-aware call metadata, framework-protocol adapters (MCP or similar), or a built-in observability surface beyond the four hooks above — these are intentional, not finished, and the plan for closing that gap honestly (including why it's a layer on top rather than a rewrite) is in [`docs/positioning.md`](docs/positioning.md). If you're evaluating this for an agent-framework integration today, read that document first.
+**In progress: LangGraph integration.** I'm building a version that integrates cleanly with the [LangGraph](https://www.langchain.com/langgraph) framework, so that a graph's nodes and sub-agents can be gated by the broker without hand-wiring `requestPermission` / `reportOutcome` around every call. It is work in progress and not yet released; nothing in the current packages is LangGraph-specific, and the API for it is not final. Until it lands, use the broker alongside LangGraph the way you would with any other framework: ask before the call, report after.
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — full design rationale, invariants, Redis data model, failure model, and the ADR log
-- [`docs/positioning.md`](docs/positioning.md) — honest take on what this is, what it isn't yet, and the intended path to agent-framework integration
-- [`docs/adr/`](docs/adr/) — architecture decision records, including rejected alternatives
-- [`python/README.md`](python/README.md) — Python package documentation, installation, and usage (see [Python](#python) above)
-- [`docs/python-port/`](docs/python-port/) — the Python port's architecture, feature parity status, and implementation plan
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — local setup, test commands, and PR expectations
-- [`RELEASE.md`](RELEASE.md) — versioning policy and the release procedure
-- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability
-- [`CHANGELOG.md`](CHANGELOG.md) — notable changes, oldest-unreleased-first
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): design rationale, invariants, Redis data model, failure model, how the two implementations relate, and the ADR log
+- [`docs/adr/`](docs/adr/): architecture decision records
+- [`typescript/README.md`](typescript/README.md): TypeScript package details
+- [`python/README.md`](python/README.md): Python package details, async usage, cancellation
+- [`test/cross-language/README.md`](test/cross-language/README.md): how the cross-language tests work
+- [`typescript/measurement/`](typescript/measurement/): measurement experiments and reports
+- [`CONTRIBUTING.md`](CONTRIBUTING.md), [`RELEASE.md`](RELEASE.md), [`SECURITY.md`](SECURITY.md), [`CHANGELOG.md`](CHANGELOG.md)
 
 ## License
 
-MIT © see [LICENSE](LICENSE)
+MIT, see [LICENSE](LICENSE).

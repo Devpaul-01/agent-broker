@@ -1,17 +1,15 @@
 """Core admission: ``request_permission``. Ports ``src/admission/request-permission.ts``.
 
 This is the central shared-protocol surface of the library (see
-``docs/python-port/FEATURE_PARITY_MATRIX.md``): the Lua script it runs
+``docs/ARCHITECTURE.md`` §23): the Lua script it runs
 (``_scripts.REQUEST_PERMISSION_SOURCE``) is byte-identical to the TypeScript implementation's,
 and the Redis keys it touches are built by the same length-prefixing scheme in ``keys.py`` — a
 reservation created by a Python caller is fully visible to, and resolvable by, a TypeScript
 caller pointed at the same Redis instance, and vice versa.
 
-Async-first (see ``docs/python-port/ARCHITECTURE.md`` §3): this module's public function is a
-coroutine, taking an async Redis client (``redis.asyncio.Redis``). A sync wrapper over this same
-core — not a second, independently-written implementation — is planned for Milestone 4 once the
-full operation set exists, so there's a complete surface to wrap once rather than two thin
-wrappers to keep in sync across milestones.
+Async-only (see ``docs/ARCHITECTURE.md`` §23): this module's public function is a
+coroutine, taking an async Redis client (``redis.asyncio.Redis``). There is no synchronous
+wrapper.
 """
 
 from __future__ import annotations

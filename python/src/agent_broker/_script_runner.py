@@ -6,8 +6,8 @@ script did not run, so retrying with EVAL cannot double-apply anything. EVAL als
 script server-side, so later calls take the cheap EVALSHA path again.
 
 Supports both the sync ``redis.Redis`` and async ``redis.asyncio.Redis`` clients the caller may
-have passed into the broker (see ``docs/python-port/ARCHITECTURE.md`` §3) via separate sync and
-async entry points, rather than one function that tries to paper over both — that kind of thin
+have passed into the broker via separate sync and
+async entry points (the broker itself only uses the async one; see ``docs/ARCHITECTURE.md`` §23), rather than one function that tries to paper over both — that kind of thin
 compatibility shim is exactly what the project brief warns against ("do not introduce
 async-only design... or add a thin, unreliable compatibility layer").
 """

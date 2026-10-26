@@ -1,20 +1,18 @@
 """Cross-language integration tests: a real TypeScript process and a real Python process,
 each running the actual library in its own language, coordinating through the same Redis
 instance. This is what proves the shared protocol (key construction, Lua scripts, serialization)
-documented in docs/python-port/ARCHITECTURE.md actually holds — not just that each language's
+documented in docs/ARCHITECTURE.md §23 actually holds — not just that each language's
 own test suite passes independently.
 
-Required scenarios, from the project brief and docs/python-port/IMPLEMENTATION_PLAN.md's
-Milestone 5 section:
+Scenarios covered:
   - TS registers a root agent, Python calls request_permission against it.
   - Python registers, TS resolves.
   - Both languages racing for the same budget pool.
   - One language's retryable failures open the circuit breaker, observed by the other.
   - Cleanup sweep triggered by one language resolves a reservation created by the other.
 
-Run with: `cd python && python3 -m pytest ../test/cross-language/test_cross_language.py -v`
-(requires a reachable Redis - see docs/python-port/BASELINE.md for provisioning - and `npx`
-on PATH for the TypeScript worker).
+Run with: `python3 -m pytest test/cross-language/ -v` from the repository root (requires a
+reachable Redis, `npx` on PATH for the TypeScript worker, and `npm ci` run in typescript/).
 """
 
 from __future__ import annotations

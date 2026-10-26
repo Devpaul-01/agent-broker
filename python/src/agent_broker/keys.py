@@ -1,8 +1,8 @@
 """Redis key construction — the single source of truth for every key this library touches.
 
 Ports ``src/redis/keys.ts`` verbatim in behavior. This module is part of the cross-language
-shared protocol (see ``docs/python-port/ARCHITECTURE.md`` and
-``docs/python-port/FEATURE_PARITY_MATRIX.md``): for any given input, every function here MUST
+shared protocol (see
+``docs/ARCHITECTURE.md`` §23): for any given input, every function here MUST
 produce the exact same string as its TypeScript counterpart, or a Python process and a
 TypeScript process will silently address different Redis keys for what the caller believes is
 the same budget/concurrency/circuit scope.

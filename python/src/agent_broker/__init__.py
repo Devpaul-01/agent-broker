@@ -1,8 +1,9 @@
 """Agent Broker — Redis-coordinated admission control for independent agent processes.
 
 This is the Python implementation, a genuine port (not a Node.js wrapper) of the TypeScript
-Agent Broker library in this same repository. See ``docs/python-port/`` at the repository root
-for the architecture, feature-parity status, and implementation plan.
+Agent Broker library in this same repository. It has not been published to PyPI yet; install it from the repository (see
+``python/README.md``). See ``docs/ARCHITECTURE.md`` §23 at the repository root for how it
+relates to the TypeScript library.
 
 The public surface mirrors ``typescript/src/index.ts`` one-to-one:
 
