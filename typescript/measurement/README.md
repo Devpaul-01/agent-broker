@@ -1,15 +1,13 @@
 # agent-broker measurement workspace
 
-Audit, experiment design, and executed results for agent-broker's engineering properties. Start with `RESULTS_SUMMARY.md` for the consolidated picture, or `RESUME_METRIC_RECOMMENDATIONS.md` if you just want the resume-ready bullets and their evidence.
+Audit, experiment design, and executed results for agent-broker's engineering properties. Start with `RESULTS_SUMMARY.md` for the consolidated picture.
 
 ## Documents
 
 - `METRICS_AUDIT.md` — source-grounded inventory of every measurement opportunity found in the repo, prioritized P0–P2, plus rejected categories and why.
-- `RESUME_METRICS_AUDIT.md` — review of resume claims against the repo's actual capabilities.
 - `MEASUREMENT_PLAN.md` — experiment designs for the P0 batch (M1–M5), plus execution history and corrections found while implementing.
 - `RESULTS_SUMMARY.md` — consolidated results across all five P0 experiments.
-- `RESUME_METRIC_RECOMMENDATIONS.md` — the recommended resume bullets, each traceable to a specific artifact, with interview talking points.
-- `reports/` — one detailed report per experiment (objective, environment, workload, results, interpretation, limitations, resume suitability).
+- `reports/` — one detailed report per experiment (objective, environment, workload, results, interpretation, limitations, how to cite it).
 
 ## Requirements
 

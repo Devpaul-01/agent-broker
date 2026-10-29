@@ -55,9 +55,9 @@ Not applicable — both are correctness invariants, not performance comparisons.
 
 Single-machine; `probeRate: 0.0001` is a probabilistic bound stated as such, not a guarantee; process counts (20–30) are below a large production fleet, though the mechanism (Redis-side Lua atomicity) is not expected to depend on process count for correctness.
 
-## Resume suitability
+## How to cite this result
 
-**Resume-ready.** Both are strong, repeatable, zero-exception correctness results:
+**Citable as-is.** Both are strong, repeatable, zero-exception correctness results:
 
 > "Verified, via automated tests spawning 20–30 real independent OS processes, that a shared budget pool cannot be overdrawn and that circuit-breaker state is correctly shared (not locally duplicated) across processes — including a process with zero local failure history being correctly denied due to another process's failures, and one process's recovery reopening the circuit for others. 188/188 tests passing across the full suite."
 

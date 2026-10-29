@@ -54,10 +54,8 @@ Lives at `typescript/measurement/` (the TypeScript package's own subdirectory, p
 ```
 typescript/measurement/
 ├── METRICS_AUDIT.md                              (Part One)
-├── RESUME_METRICS_AUDIT.md                        (Part One, updated Part Two)
 ├── MEASUREMENT_PLAN.md                            (Part One, updated Part Two)
 ├── RESULTS_SUMMARY.md                             (this file)
-├── RESUME_METRIC_RECOMMENDATIONS.md                (Part Two)
 ├── README.md                                       (Part Two — reproduction instructions)
 ├── vitest.config.ts                                (Part Two — scoped test config for measurement/bench)
 ├── bench/

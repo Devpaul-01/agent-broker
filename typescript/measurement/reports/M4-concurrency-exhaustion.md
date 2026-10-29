@@ -57,9 +57,9 @@ Not applicable in the percentage sense — this is a correctness invariant (eith
 - Does not test the "slot released mid-race" interleaving (a process reports success while others are still contending) — a related but distinct scenario from what was tested here.
 - 20-process scale is below what a large production fleet might run concurrently, though the underlying mechanism (Redis server-side atomicity via the Lua script) does not depend on process count for correctness — the scale was chosen to match M1's established scale for direct comparability, not because correctness would plausibly break at a different count.
 
-## Resume suitability
+## How to cite this result
 
-**Resume-ready.** This is a real, newly-built, correctness-verified integration-test result that closes a specific, previously-identified gap:
+**Citable as-is.** This is a real, newly-built, correctness-verified integration-test result that closes a specific, previously-identified gap:
 
 > "Verified, via automated tests spawning 20 real independent OS processes, that the in-flight concurrency limit is enforced exactly under simultaneous contention — confirmed deterministically across repeated runs, with zero deviation."
 

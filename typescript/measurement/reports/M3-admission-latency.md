@@ -69,13 +69,9 @@ This result is interesting against the architecture doc's own stated caveat: `do
 - Sequential only — says nothing about latency degradation under concurrent contention (that's M7, not yet implemented).
 - The synthetic 3-round-trip comparison is a reference point for round-trip-count cost, not a reconstruction of any prior implementation.
 
-## Resume suitability
+## How to cite this result
 
-**Resume-ready, with precise wording.** This is a real, repeatable, correctness-verified absolute number:
-
-> "Measured the core atomic admission operation (budget + concurrency + circuit-breaker check in a single Redis round trip) at a median of ~0.25ms and p99 under 5ms on local Redis (N=1000, 3 independent runs)."
-
-This must be worded as a **local/synthetic benchmark result**, not a production number, and must not claim a percentage improvement over anything (no historical baseline exists). See `RESUME_METRIC_RECOMMENDATIONS.md` for the exact recommended phrasing and interview talking points.
+Report it as a **local, synthetic benchmark**, not a production number, and without any percentage-improvement claim (no historical baseline exists). Suggested wording: "The atomic admission operation (budget + concurrency + circuit-breaker check in one Redis round trip) measured a median of ~0.25 ms and p99 under 5 ms on local Redis (N=1000, 3 independent runs)."
 
 ## Evidence trail
 

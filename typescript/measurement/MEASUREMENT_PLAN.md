@@ -45,7 +45,7 @@ Covers the five P0 candidates from `METRICS_AUDIT.md` (M1, M2, M3, M4, M5). Each
 
 **Known limitations:** Single-machine only (no real network latency between "processes"); does not test Redis failover or multi-Redis-node setups; process count (20–30) is far below what a production fleet might run, though the mechanism being tested (Redis-side atomicity) does not depend on process count for correctness.
 
-**Resume-safe interpretation:** "Verified, via automated tests spawning real independent OS processes, that a shared budget pool cannot be overdrawn under concurrent admission requests — confirmed across repeated runs with 20–30 simultaneous processes." This is an **integration-test result**, not a production observation, and should be labeled as such.
+**Safe wording:** "Verified, via automated tests spawning real independent OS processes, that a shared budget pool cannot be overdrawn under concurrent admission requests — confirmed across repeated runs with 20–30 simultaneous processes." This is an **integration-test result**, not a production observation, and should be labeled as such.
 
 ---
 
@@ -88,7 +88,7 @@ Covers the five P0 candidates from `METRICS_AUDIT.md` (M1, M2, M3, M4, M5). Each
 
 **Known limitations:** Same single-machine caveat as M1. `probeRate: 0.0001` makes the "no accidental probe" result overwhelmingly likely but not a mathematical guarantee — this must be stated exactly that way, not as "zero probes, always."
 
-**Resume-safe interpretation:** "Verified, via tests spawning independent processes with no shared memory, that circuit-breaker state (open/closed, recovery) is correctly shared through Redis — a process that never made a failing call is denied because of another process's failures, and a single process's successful recovery probe reopens the circuit for every other waiting process." Label as an **integration-test result**.
+**Safe wording:** "Verified, via tests spawning independent processes with no shared memory, that circuit-breaker state (open/closed, recovery) is correctly shared through Redis — a process that never made a failing call is denied because of another process's failures, and a single process's successful recovery probe reopens the circuit for every other waiting process." Label as an **integration-test result**.
 
 ---
 
@@ -130,7 +130,7 @@ Covers the five P0 candidates from `METRICS_AUDIT.md` (M1, M2, M3, M4, M5). Each
 
 **Known limitations:** Single-machine, localhost Redis — this is a *best case* number, explicitly not representative of production network latency to a managed Redis instance (e.g. Redis Cloud, ElastiCache with real network hops). Must state this plainly alongside any number reported.
 
-**Resume-safe interpretation:** "Measured the atomic admission operation's own latency on local Redis: median ~X ms, p99 ~Y ms, N=1000" — labeled explicitly as a **synthetic benchmark** on localhost, not a production number, and not compared to any historical baseline unless the optional 3-round-trip comparison is also run and clearly labeled as a *current, synthetic* comparison, never a historical one.
+**Safe wording:** "Measured the atomic admission operation's own latency on local Redis: median ~X ms, p99 ~Y ms, N=1000" — labeled explicitly as a **synthetic benchmark** on localhost, not a production number, and not compared to any historical baseline unless the optional 3-round-trip comparison is also run and clearly labeled as a *current, synthetic* comparison, never a historical one.
 
 ---
 
@@ -170,7 +170,7 @@ Covers the five P0 candidates from `METRICS_AUDIT.md` (M1, M2, M3, M4, M5). Each
 
 **Known limitations:** Same single-machine caveat as M1/M2.
 
-**Resume-safe interpretation:** "Verified the in-flight concurrency limit holds exactly under real multi-process contention, denying exactly the expected excess with `concurrency_exceeded`." Integration-test result.
+**Safe wording:** "Verified the in-flight concurrency limit holds exactly under real multi-process contention, denying exactly the expected excess with `concurrency_exceeded`." Integration-test result.
 
 ---
 
@@ -212,14 +212,14 @@ Covers the five P0 candidates from `METRICS_AUDIT.md` (M1, M2, M3, M4, M5). Each
 
 **Known limitations:** Because cleanup is lazy (triggered by the next `requestPermission` call, not a background timer — a deliberate design choice per ADR-0001), recovery time in a genuinely idle system is unbounded in the worst case (no new calls, no sweep triggered). This is a real, honest limitation to report, not something to paper over — and it's a great interview question to be ready for ("what if nothing calls requestPermission again?").
 
-**Resume-safe interpretation:** "Verified that a caller crash before reporting an outcome results in automatic reservation cleanup and budget refund once a subsequent admission call triggers the lazy sweep, with no double-refund if a late report races the sweep." Integration-test result, with the lazy-trigger caveat stated explicitly.
+**Safe wording:** "Verified that a caller crash before reporting an outcome results in automatic reservation cleanup and budget refund once a subsequent admission call triggers the lazy sweep, with no double-refund if a late report races the sweep." Integration-test result, with the lazy-trigger caveat stated explicitly.
 
 ---
 
 ## Cross-cutting notes for all five experiments
 
 - **Evidence labeling (Section 11 of the brief):** M1, M2, M4, M5 are all **integration-test results** (real dependencies — actual forked processes, actual Redis — but a controlled test scenario, not production traffic). M3 is a **synthetic benchmark** (quantitative, documented artificial workload). None of these may be labeled as a "production observation" — there is no production traffic for this project, as stated in the mission brief itself.
-- **Nothing here is designed to produce a specific resume-ready percentage.** M1/M2/M4/M5 produce pass/fail correctness evidence; M3 produces an absolute latency number with no historical comparison baked in. Any percentage claim must wait for the optional, clearly-labeled synthetic comparison described in M3, and even then must be worded as a *current* comparison, never as proof of a *historical* improvement.
+- **Nothing here is designed to produce a specific headline percentage.** M1/M2/M4/M5 produce pass/fail correctness evidence; M3 produces an absolute latency number with no historical comparison baked in. Any percentage claim must wait for the optional, clearly-labeled synthetic comparison described in M3, and even then must be worded as a *current* comparison, never as proof of a *historical* improvement.
 - **Environment to record for every run, every experiment:** Redis version and config, Node version, OS/CPU, whether the machine was under other load during the run, and the exact git commit SHA tested (`36f7674216389acae84cfa15986ac540cbaf54bd` as of this plan).
 
 ## Execution update: M1 and M2 were run in this session, at full designed scale — 188/188 tests pass
@@ -245,7 +245,6 @@ After the initial blocker (below) was resolved, a local Redis 7 instance was sta
 **What remains for Part Two:**
 1. Build and run the M3 latency-distribution benchmark (does not exist yet — the one genuine gap confirmed by this audit, since no benchmark code exists anywhere in the repo).
 2. Build and run the new M4 (dedicated concurrency-exhaustion test, distinct from the budget-exhaustion tests already covered) and M5 (crash-recovery) tests, following the designs above.
-3. Carry the now-real M1/M2 results into `RESUME_METRICS_AUDIT.md` once actual resume text is supplied.
 4. Optionally re-run the suite on a genuinely multi-core machine to get faster wall-clock numbers — not needed for correctness (already proven), only relevant if CI time budget matters later.
 
 ## Original blocker (resolved)

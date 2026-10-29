@@ -1,5 +1,7 @@
 # agent-broker
 
+[![TypeScript CI](https://github.com/Devpaul-01/agent-broker/actions/workflows/typescript.yml/badge.svg)](https://github.com/Devpaul-01/agent-broker/actions/workflows/typescript.yml) [![Python CI](https://github.com/Devpaul-01/agent-broker/actions/workflows/python.yml/badge.svg)](https://github.com/Devpaul-01/agent-broker/actions/workflows/python.yml) [![Cross-language](https://github.com/Devpaul-01/agent-broker/actions/workflows/cross-language.yml/badge.svg)](https://github.com/Devpaul-01/agent-broker/actions/workflows/cross-language.yml) [![npm](https://img.shields.io/npm/v/agent-broker)](https://www.npmjs.com/package/agent-broker) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **A Redis-backed admission gate for multi-process agent and LLM-calling systems, with TypeScript and Python implementations that coordinate through the same Redis.**
 
 `agent-broker` answers one question, correctly, under real concurrency and across real process boundaries: *"Is this call allowed to happen right now?"* It accounts for shared budget, delegation depth, in-flight concurrency, and recent failure history against the target you are about to call. It does **not** make the call for you: you ask before, you report after, and you stay in full control of the request itself.
@@ -21,6 +23,23 @@ your process → broker.reportOutcome({ reservationId, success, actualCost })
 ```
 
 > **Coming next:** a LangGraph-native integration is in development and not yet released. See [Project status](#project-status-and-roadmap).
+
+---
+
+## See it work
+
+Thirty independent OS processes ask for budget at the same moment. The pool covers exactly three calls.
+
+```bash
+cd typescript && npm install && npm run demo:race     # needs a local Redis
+```
+
+```
+30 processes racing for a budget that covers 3 calls...
+admitted: 3   denied: 27   OK exactly 3
+```
+
+Run it as often as you like: exactly three get in, every time. The check-and-reserve step is one Lua script, so there is no window between "is there budget?" and "take it." The source is [`typescript/examples/`](typescript/examples/race-demo.ts); the test version is [`budget-contention.test.ts`](typescript/test/integration/failure-modes/budget-contention.test.ts).
 
 ---
 
@@ -236,8 +255,6 @@ await broker.requestPermission(
 ```
 
 This polls the same atomic admission path with backoff until admitted, `queueTimeout` elapses (`reason: 'queue_timeout'`), or the denial reason is one that waiting can never fix (`unknown_agent` returns immediately, not after a timeout). You can also pass an `AbortSignal` (`{ mode: "queue", signal }`) to cancel the wait externally; an aborted wait resolves with `reason: 'aborted'`.
-
----
 
 ---
 

@@ -59,13 +59,13 @@ Not applicable in the percentage sense, consistent with M1/M2/M4 — this is a c
 - The "lazy, not timer-driven" recovery-time caveat above is a genuine, unresolved architectural property, not something this experiment can round off — don't let the passing test imply a bounded recovery SLA exists.
 - Only one specific interleaving (crash → wait past TTL → trigger → late report after sweep) was tested in scenario 2. A late report arriving *during* the sweep itself (a tighter race window) was not tested and would need a more precisely timed experiment.
 
-## Resume suitability
+## How to cite this result
 
-**Resume-ready.** This closes the one remaining P0 correctness gap and demonstrates a deliberate architectural trade-off with real evidence:
+**Citable as-is.** This closes the one remaining P0 correctness gap and demonstrates a deliberate architectural trade-off with real evidence:
 
 > "Verified, via tests that genuinely kill a worker process mid-reservation, that abandoned reservations are automatically recovered — budget refunded and concurrency released — once triggered by a subsequent call from an independent process, with no double-refund if a delayed report races the recovery."
 
-Must be labeled as an **integration-test result**. The "recovery time is unbounded in a fully idle system" caveat should be mentioned if the claim is pressed further in an interview — see `RESUME_METRIC_RECOMMENDATIONS.md`.
+Must be labeled as an **integration-test result**. The "recovery time is unbounded in a fully idle system" caveat should be mentioned if the claim is pressed further in an interview.
 
 ## Evidence trail
 

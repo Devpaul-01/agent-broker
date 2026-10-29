@@ -149,3 +149,12 @@ after publishing:
   ```
 - A git tag that was pushed for a version you're abandoning should stay — it's a historical
   record of what was actually published, not something to delete.
+
+## Publishing the Python package
+
+Python is not on PyPI yet. The workflow `.github/workflows/publish-python.yml` publishes it with PyPI Trusted Publishing (no API token stored in GitHub).
+
+1. On pypi.org, create a *pending publisher* for project `agent-broker`: owner `Devpaul-01`, repo `agent-broker`, workflow `publish-python.yml`, environment `pypi`.
+2. In the GitHub repo settings, create an environment named `pypi`.
+3. Confirm `version` in `python/pyproject.toml`, then tag and push: `git tag python-v0.1.0 && git push origin python-v0.1.0`.
+4. After it appears on PyPI, change the Python column of the README status table to `pip install agent-broker` and remove the "Not yet published" wording.
